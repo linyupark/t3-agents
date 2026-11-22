@@ -16,6 +16,12 @@ mkdir -p \
 # /tmp 和 /var/tmp 挂在 workspace 下，保持临时目录语义
 chmod 1777 /tmp /var/tmp 2>/dev/null || true
 
+# git 全局配置挂的是目录，GIT_CONFIG_GLOBAL 指向其中的文件；
+# 文件缺失时 git 仍可运行，但先补一个方便用户直接 git config --global
+mkdir -p /root/.config/git
+[ -f /root/.config/git/gitconfig ] || : > /root/.config/git/gitconfig 2>/dev/null || true
+chmod 600 /root/.config/git/gitconfig 2>/dev/null || true
+
 # CLAUDE_CONFIG_DIR=/root/.claude：全局状态在持久化目录内，避免文件级挂载导致原子写入失败
 # 如果是从旧布局升级，容器里可能还残留 /root/.claude.json，复制过来
 if [ -s /root/.claude.json ] && [ ! -s /root/.claude/.claude.json ]; then

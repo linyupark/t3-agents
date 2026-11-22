@@ -1,0 +1,185 @@
+# AGENTS.md
+
+本文件给接手本项目的 AI agent 使用。改代码前先读完，尤其是“关键约定”和“验证”两节。
+
+## 项目是什么
+
+T3 Code Agent Hub：在单个 Docker 容器里运行 T3 Code 控制面、多个 agent CLI（Claude Code / Codex / OpenCode / Pi）和可选的 Multica runtime，并附带一个无构建步骤的 Hono 管理后台。
+
+- 仓库：<https://github.com/linyupark/t3-agents>
+- 基础镜像：`node:24-bookworm-slim`
+- 代码形态：纯 ESM JavaScript，没有 TypeScript、没有前端打包步骤
+- 对外端口：T3 `3773`，管理后台 `3774`
+- 容器使用 `network_mode: host`，容器内的 `127.0.0.1` 就是宿主机
+
+## 目录速查
+
+| 路径 | 作用 |
+|---|---|
+| `Dockerfile` | 安装系统依赖、agent CLI、`chrome-devtools-mcp`、后台依赖；创建 `/etc/gitconfig` |
+| `docker-compose.yml` | 单服务定义、持久化挂载、环境变量、`shm_size` |
+| `entrypoint.sh` | 准备目录/权限/Claude 状态，然后 `exec node /opt/agent-hub/server.js` |
+| `init.sh` | 宿主机初始化：建目录、生成 `.env` 的 `ADMIN_TOKEN`、迁移旧 Claude 状态、修复 gitconfig 路径 |
+| `admin/server.js` | Hono 后台路由 + 子进程 supervisor（T3、Multica） |
+| `admin/lib/store.js` | 设置读写、原子写入、Basic Auth token |
+| `admin/lib/models.js` | 第三方模型配置生成/清理，返回需要注入的环境变量 |
+| `admin/lib/browser.js` | CDP 探测、`chrome-devtools-mcp` 管理、四个 agent 的 MCP 配置写入/清理、T3 浏览器状态 |
+| `admin/lib/agents.js` | Agent/工具版本查询与 npm 更新 |
+| `admin/lib/multica.js` | Multica CLI 封装（config/login/daemon） |
+| `admin/lib/procs.js` | 子进程管理、进程组终止、环形日志 |
+| `admin/lib/t3.js` | `t3 pair` 解析 |
+| `admin/public/index.html` | 单页 UI，所有 CSS/JS 内联 |
+
+运行时目录（都在宿主机 `config/` 或 `workspace/` 下，已 gitignore）：
+
+- `config/admin/settings.json`：后台设置（含 Multica token、模型 key），权限 0600
+- `config/admin/admin-token`：未设置 `ADMIN_TOKEN` 时自动生成的密码
+- `config/claude/.claude.json`：Claude 全局状态（`CLAUDE_CONFIG_DIR=/root/.claude`）
+- `config/git/gitconfig`：git 全局配置（`GIT_CONFIG_GLOBAL`）
+- `config/logs/{t3,multica,admin}.log`
+- `workspace/`：agent 工作区，`/workspace` 挂载点
+
+## 启动链路
+
+1. `entrypoint.sh`：建目录、修复权限、确保 `.claude.json` 和 gitconfig 存在。
+2. `server.js`：
+   - `loadSettings()` 读取 `DATA_DIR/settings.json`；
+   - `applyModelConfig()` 写入各 agent 模型配置，并把 Codex key 放进 `AGENT_HUB_CODEX_KEY`；
+   - `applyBrowserConfig()` 异步写入/清理 `agenthub-cdp` MCP；
+   - 启动 Hono，监听 `ADMIN_PORT`；
+   - `ManagedProcess` 拉起 `t3 serve`，按配置恢复 Multica。
+3. 所有后台路由（除 `/healthz`）都经过 Basic Auth；用户名随意，密码是 `ADMIN_TOKEN`。
+
+## 关键约定
+
+### 1. 不要用文件级 bind mount 挂载会被原子写入的配置
+
+Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果把它挂成单个文件，rename 会 `EBUSY`。因此：
+
+- Compose 挂的是目录 `config/claude:/root/.claude`；
+- 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，状态文件落在目录内的 `.claude.json`；
+- `init.sh` / `entrypoint.sh` 负责从旧布局迁移。
+
+同样的坑也适用于 git 配置：现在挂载目录 `config/git:/root/.config/git`，由 `GIT_CONFIG_GLOBAL` 指向目录里的 `gitconfig`。
+
+**新增任何会被程序写入的配置时，优先挂目录，不要挂单个文件。**
+
+### 2. Git 配置与 safe.directory
+
+- 镜像内 `/etc/gitconfig` 写入了 `[safe] directory = *`。原因是 workspace 来自 bind mount，宿主 uid 与容器 root 不一致时 git 会拒绝操作。这是单用户容器的有意设置，不要删除。
+- git 全局配置在 `config/git/gitconfig`，通过 `GIT_CONFIG_GLOBAL` 读取；`entrypoint.sh` 会保证目录和文件存在。
+- 不要恢复 `./config/git/gitconfig:/root/.gitconfig` 这种文件挂载，Docker 在源文件不存在时会把它建成目录，容器内所有 git 命令都会报错。
+
+### 3. MCP / CDP
+
+- 统一 MCP 名称是 `agenthub-cdp`，命令等价于 `chrome-devtools-mcp --browser-url=<CDP_URL>`。
+- 写入位置：
+  - Claude：`$CLAUDE_CONFIG_DIR/.claude.json` 顶层 `mcpServers.agenthub-cdp`
+  - Codex：`~/.codex/config.toml` 的 `[mcp_servers.agenthub-cdp]`
+  - OpenCode：`~/.config/opencode/opencode.json` 的 `mcp.servers.agenthub-cdp`
+  - Pi：`~/.pi/agent/mcp.json` 的 `mcpServers.agenthub-cdp`
+- 清理时只删 `agenthub-cdp`，绝不能动用户已有的其他 MCP 条目。
+- `chrome-devtools-mcp` 镜像内装在 `/usr/local`；后台更新会装进持久卷 `/opt/agents`，并优先使用卷里的版本。
+- **T3 自带预览浏览器不能接外部 CDP**：它固定启动自己下载的 headless Chrome，用 `--remote-debugging-pipe` 控制。T3 内 agent 用 `preview_*` 工具；外部 CDP 是另一套给 agent 用的工具。
+- root 容器必须保留 `T3CODE_SERVER_BROWSER_SANDBOX=0`，否则 Chrome sandbox 起不来；`shm_size: 1g` 也不要删。
+
+### 4. 模型配置
+
+- Claude Code 只能接 Anthropic 兼容端点。
+- Codex 只支持 OpenAI Responses（`wire_api = "responses"`）。
+- OpenCode / Pi 两种协议都支持。
+- Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入。**新增、替换或取消 Codex 分配后必须重启 T3**，否则旧 key 会残留；`server.js` 已有这段逻辑，改动时不要破坏。
+- 给协议不兼容的 agent 分配配置时，要警告并清掉后台之前写入的配置，不能沿用旧端点。
+
+### 5. 密钥与日志
+
+- 仓库里绝不能出现真实 token、API key、私钥；`.env`、`config/`、`workspace/` 都已 gitignore。
+- Multica token 只存在 `settings.json`（0600）；所有会返回给前端或写日志的 CLI 输出都要经过脱敏（参考 `redactSteps`）。
+- 管理后台拒绝把 token 写进 URL 或外部请求。
+
+### 6. Docker / 持久化
+
+- 命名卷 `agent_npm`、`agent_local` 只在**首次创建**时从镜像初始化。给镜像新增 npm 包后，老卷不会自动出现；要么放到镜像内的 `/usr/local`，要么在后台提供安装按钮，并在 README 说明。
+- 修改安装开关、想从镜像重新灌包：`docker compose down -v`（只删这两个命名卷，不影响 bind mount）。
+- Compose 需要 ≥ 2.24（`env_file` 的 `required: false`）。
+- 不要把宿主机的 `docker.sock` 挂进来。
+
+## 常见改动
+
+### 新增一个 agent CLI
+
+1. `Dockerfile`：加 `ARG INSTALL_<NAME>` 和安装命令。
+2. `admin/lib/agents.js`：加入 `AGENTS` 表（`key/name/pkg/bin/npm`）。
+3. `admin/lib/models.js`：如果支持第三方模型，增加配置生成/清理逻辑。
+4. `admin/lib/browser.js`：如果支持 MCP，增加 `writeX/removeX/configuredAgents` 分支。
+5. `docker-compose.yml`：需要持久化的配置目录加挂载。
+6. 更新 `README.md`、本文件和后台 UI 的说明。
+
+### 新增后台 API
+
+- 路由写在 `admin/server.js`；Basic Auth 中间件会自动覆盖，不需要单独鉴权。
+- 写设置用 `saveSettings()`，不要直接 `fs.writeFile`。
+- 返回给前端的敏感字段必须先脱敏。
+- 需要长时间运行的命令用 `ManagedProcess` 或 `updateAgent` 的串行锁，不要在请求里裸 `exec`。
+
+### 修改前端
+
+- 没有构建步骤，直接改 `admin/public/index.html` 的内联 `<script>`。
+- 改完用下面的方法做语法检查：
+
+```bash
+python3 - <<'PY'
+import re
+html = open('admin/public/index.html', encoding='utf-8').read()
+open('/tmp/admin-check.mjs','w').write('\n'.join(re.findall(r'<script[^>]*>(.*?)</script>', html, re.S)))
+PY
+node --check /tmp/admin-check.mjs
+```
+
+### 新增持久化目录
+
+同时改三处：`docker-compose.yml` 挂载、`entrypoint.sh` 建目录/权限、`init.sh` 在宿主机建目录。只改 compose 会在首次启动时由 Docker 以 root 创建，权限可能不对。
+
+## 验证
+
+当前开发环境通常没有 Docker，按以下顺序验证：
+
+```bash
+# 1. JS / shell / compose 语法
+node --check admin/server.js
+for f in admin/lib/*.js; do node --check "$f"; done
+bash -n entrypoint.sh init.sh
+python3 -I -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('yaml ok')"
+
+# 2. 后台依赖（改了 package.json 才需要）
+cd admin && npm ci --omit=dev --no-fund --no-audit && cd ..
+
+# 3. 用临时 HOME 测配置写入，避免污染真实配置
+#    需要设置 HOME、CLAUDE_CONFIG_DIR、DATA_DIR、PATH，
+#    并用假的 chrome-devtools-mcp 验证 write/remove 不覆盖其他 MCP。
+#    参考 admin/lib/browser.js 的 applyBrowserConfig / configuredAgents。
+
+# 4. 有真实 CDP 时，验证 MCP 握手
+#    chrome-devtools-mcp --browser-url=http://127.0.0.1:16002
+#    发 initialize + tools/list，应返回 30+ 个浏览器工具。
+
+# 5. 后台 API 冒烟：用假的 t3/multica 二进制 + 临时 DATA_DIR/LOG_DIR
+#    AUTOSTART_MULTICA=0 ADMIN_PORT=<free> ADMIN_TOKEN=<test> node admin/server.js
+#    覆盖 GET/PUT /api/browser、POST /api/browser/test、401。
+```
+
+有 Docker 时再执行：
+
+```bash
+./init.sh
+docker compose up -d --build
+docker logs -f t3code
+```
+
+## 不要做的事
+
+- 不要把 `node_modules`、`config/`、`workspace/`、`.env` 提交进仓库。
+- 不要删除 `T3CODE_SERVER_BROWSER_SANDBOX=0`、`shm_size: 1g`、`/etc/gitconfig` 的 safe.directory。
+- 不要把 T3 预览浏览器改成外部 CDP：上游没有这个能力，改了也不会生效。
+- 不要在未重启 T3 的情况下声称 Codex key 已切换。
+- 不要在没有实际运行验证的情况下声称功能可用；先跑“验证”一节的命令。

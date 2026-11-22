@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig fonts-liberation fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
+# workspace 是 bind mount，宿主 uid 与容器 root 不一致时 git 会报 dubious ownership；
+# 这是单用户容器，直接在所有仓库上放行。
+RUN printf '[safe]\n\tdirectory = *\n' > /etc/gitconfig
+
 ARG INSTALL_T3=true
 ARG INSTALL_CLAUDE=true
 ARG INSTALL_CODEX=true
@@ -26,6 +30,7 @@ ARG INSTALL_CDP_MCP=true
 ENV PATH=/opt/agents/bin:/root/.local/bin:$PATH \
     IS_SANDBOX=1 \
     CLAUDE_CONFIG_DIR=/root/.claude \
+    GIT_CONFIG_GLOBAL=/root/.config/git/gitconfig \
     DATA_DIR=/root/.agent-hub \
     LOG_DIR=/var/log/agent-hub
 

@@ -31,7 +31,8 @@ npm ls -g "claude-code"   # 永远查不到，于是每次都重装
 
 - 所有 npm 全局包装进 `/opt/agents`，compose 用命名卷 `agent_npm` 持久化；
 - 已移除 Antigravity（`agy`）；`/root/.local` 保留为命名卷 `agent_local`，供 pipx/uv 等 user-level 工具使用；
-- Claude Code 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，全局状态文件落在 `config/claude/.claude.json`。旧布局的 `config/claude.json` 会在 `init.sh` 里自动迁移；这样也避免了文件级 bind mount 与 Claude 的原子写入冲突。**已有部署升级后请先重跑一次 `./init.sh` 再重建**；如果 `config/git/gitconfig` 曾被 Docker 建成了空目录，`init.sh` 也会自动恢复成文件，修复后需要重启容器让挂载生效；
+- Claude Code 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，全局状态文件落在 `config/claude/.claude.json`。旧布局的 `config/claude.json` 会在 `init.sh` 里自动迁移；这样也避免了文件级 bind mount 与 Claude 的原子写入冲突。**已有部署升级后请先重跑一次 `./init.sh` 再重建**；
+- Git 全局配置改为挂载目录 `./config/git:/root/.config/git`，`GIT_CONFIG_GLOBAL` 指向其中的 `gitconfig`，不再直接挂载单个文件，Docker 不会再把源建成目录；镜像里的 `/etc/gitconfig` 设置了 `safe.directory = *`，避免 workspace 宿主 uid 与容器 root 不一致导致 git 拒绝操作。老部署如果 `config/git/gitconfig` 已被建成空目录，`init.sh` 会尝试恢复，修复后需要重启容器；
 - 删除了启动时的自动更新循环。升级在管理后台点按钮，写入的是持久卷。
 
 首次 `docker compose up --build` 会从镜像初始化这两个卷；之后 `down` / `up` 不会重装。
@@ -186,6 +187,8 @@ T3 自己的预览浏览器：
 ├── docker-compose.yml
 ├── entrypoint.sh          # 目录准备 -> exec node server.js
 ├── init.sh                # 宿主机初始化
+├── AGENTS.md              # 接手开发的 agent 必读
+├── CLAUDE.md              # 指向 AGENTS.md
 ├── admin/
 │   ├── server.js          # Hono 后台 + 进程 supervisor
 │   ├── lib/
@@ -200,6 +203,8 @@ T3 自己的预览浏览器：
 ├── config/                # 运行时生成，已 gitignore
 │   ├── claude/
 │   │   └── .claude.json   # Claude 全局状态（CLAUDE_CONFIG_DIR）
+│   ├── git/
+│   │   └── gitconfig      # git 全局配置（GIT_CONFIG_GLOBAL）
 │   ├── cache/             # ~/.cache
 │   ├── npm/               # ~/.npm
 │   └── ...
@@ -213,6 +218,7 @@ T3 自己的预览浏览器：
 - 管理后台能执行固定命令、改 agent 配置，等于高权限入口。`ADMIN_TOKEN` 用长随机串，不要直接暴露到公网；建议放在 Tailscale / 反代 + HTTPS 后面。
 - `network_mode: host` 下 `ADMIN_BIND=0.0.0.0` 会监听所有网卡。只想本机访问就改成 `127.0.0.1`。
 - CDP 端口（默认 `16002`）等于浏览器控制权，能看到/操作已登录的站点。只让它监听 `127.0.0.1`，不要暴露到局域网或公网。
+- 镜像内 `/etc/gitconfig` 设置了 `safe.directory = *`，让容器内 root 能操作 bind mount 的宿主仓库。这是单用户容器的便利设置，不要把不受信任的仓库挂进来。
 - 后台不使用宿主机的 `docker.sock`，避免把 Docker 控制权交给 agent。
 - 容器内是 root + `IS_SANDBOX=1`，隔离边界来自容器本身；不要把不可信代码和宿主机敏感目录一起挂进来。
 

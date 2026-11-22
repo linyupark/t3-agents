@@ -46,8 +46,8 @@ services:
       # SSH 密钥（T3 Code 远程环境连接用）
       - ./config/ssh:/root/.ssh
 
-      # Git 全局配置
-      - ./config/git/gitconfig:/root/.gitconfig:ro
+      # Git 全局配置：挂目录而不是单个文件，避免 Docker 把不存在的源建成目录
+      - ./config/git:/root/.config/git
 
       # agent 缓存（pip/uv/playwright/go-build 等），重建容器不丢
       - ./config/cache:/root/.cache
@@ -75,6 +75,8 @@ services:
       - IS_SANDBOX=1
       # 把 Claude 全局状态文件放进持久化目录，避免文件级 bind mount 与原子写入冲突
       - CLAUDE_CONFIG_DIR=/root/.claude
+      # git 全局配置指向目录挂载里的文件，避免单文件 bind mount
+      - GIT_CONFIG_GLOBAL=/root/.config/git/gitconfig
       # root 容器无法启用 Chrome sandbox；T3 内置预览浏览器必须关闭它
       - T3CODE_SERVER_BROWSER_SANDBOX=0
       - T3_PORT=${T3_PORT:-3773}
