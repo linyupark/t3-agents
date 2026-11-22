@@ -5,6 +5,21 @@
 
 ## 2026-11-22
 
+### 后台支持按模型配置思考等级
+
+- 每个模型新增 `efforts[]`（UI 里是逗号分隔的“思考等级”），默认 / 快速模型也能配置。
+- OpenCode：写 `providers.agenthub.models[id].variants`（数组 + `settings.reasoningEffort`）。
+  T3 的 OpenCode 选择器只读 `model.variants`；后台之前没有写，无法按模型控制等级
+  （OpenCode 会自行生成默认 `low/medium/high`）。未勾选“推理”时写 `variants: []`，
+  显式关掉这些默认等级。实测对象形式的 `variants` 会让整个 provider 校验失败，数组才行。
+- Pi：写 `reasoning: true` + `thinkingLevelMap`，用 `null` 隐藏模型不支持的等级。
+- Claude：显式等级优先写进 T3 的 `customModels.optionDescriptors`；没填时仍按网关
+  `/v1/models` 的 `reasoning_efforts` 或 `low/high/max` 兜底。
+- Codex：显式等级写进 `model_catalog_json` 的 `supported_reasoning_levels` 和
+  `default_reasoning_level`；没填时沿用模板能力。
+- 各 agent 只写自己支持的等级，未识别的值在保存结果里给出警告。
+- `modelsSignature` 加入 `efforts`，修改等级会触发 T3 重启刷新模型列表。
+
 ### 文档校对（README / AGENTS）
 
 - README 目录树补齐 `admin/lib/anthropic-proxy.js`、`admin/lib/t3-models.js`、

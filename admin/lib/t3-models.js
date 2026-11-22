@@ -64,7 +64,11 @@ async function fetchGatewayModels(profile) {
   }
 }
 
-function effortsForModel(meta) {
+function effortsForModel(model, meta) {
+  // 后台显式填写的等级优先；不同模型可以完全不同。
+  if (Array.isArray(model?.efforts) && model.efforts.length) {
+    return model.efforts.filter((value) => CLAUDE_EFFORTS.includes(value));
+  }
   if (!meta) return ['low', 'high', 'max'];
   if (meta.supports_reasoning === false) return [];
   const listed = Array.isArray(meta.reasoning_efforts)
@@ -91,12 +95,17 @@ export async function applyT3ClaudeModels(models) {
   const file = t3SettingsFile();
   const { profile, targets } = claudeTargets(models);
   const gateway = targets.length ? await fetchGatewayModels(profile) : new Map();
+  const warnings = [];
   const customModels = targets.map((model) => {
     const entry = { slug: model.id, name: model.name || model.id };
     if (model.reasoning) {
-      const efforts = effortsForModel(gateway.get(model.id));
+      const efforts = effortsForModel(model, gateway.get(model.id));
       if (efforts.length) {
         entry.capabilities = { optionDescriptors: [effortDescriptor(efforts)] };
+      } else if (Array.isArray(model.efforts) && model.efforts.length) {
+        warnings.push(
+          `Claude：模型 ${model.id} 的思考等级都不在 Claude 支持范围内（${CLAUDE_EFFORTS.join('/')}），已跳过等级选项。`,
+        );
       }
     }
     return entry;
@@ -110,10 +119,11 @@ export async function applyT3ClaudeModels(models) {
         written: false,
         file,
         slugs: [],
+        warnings,
         warning: `无法解析 T3 设置文件 ${file}，Claude 的额外模型不会出现在 T3 选择器里。`,
       };
     }
-    if (!customModels.length) return { written: false, file, slugs: [] };
+    if (!customModels.length) return { written: false, file, slugs: [], warnings };
     doc = {};
   }
 
@@ -123,7 +133,7 @@ export async function applyT3ClaudeModels(models) {
 
   // 没有 Claude 分配、T3 里也没有我们写过的模型时，不碰 T3 的设置文件。
   if (!customModels.length && !currentModels.length) {
-    return { written: false, file, slugs: [] };
+    return { written: false, file, slugs: [], warnings };
   }
 
   const instance = { ...(current || {}), driver: current?.driver || 'claudeAgent' };
@@ -136,9 +146,9 @@ export async function applyT3ClaudeModels(models) {
   doc.providerInstances = instances;
 
   if (JSON.stringify(currentModels) === JSON.stringify(customModels)) {
-    return { written: false, file, slugs: customModels.map((model) => model.slug) };
+    return { written: false, file, slugs: customModels.map((model) => model.slug), warnings };
   }
 
   writeJson(file, doc, 0o600);
-  return { written: true, file, slugs: customModels.map((model) => model.slug) };
+  return { written: true, file, slugs: customModels.map((model) => model.slug), warnings };
 }

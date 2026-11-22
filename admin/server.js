@@ -106,6 +106,7 @@ async function applyModels() {
   // Claude 的额外模型不能靠环境变量，必须写进 T3 自己的 providerInstances。
   try {
     const t3Models = await applyT3ClaudeModels(settings.models);
+    if (Array.isArray(t3Models.warnings)) result.warnings.push(...t3Models.warnings);
     if (t3Models.warning) result.warnings.push(t3Models.warning);
   } catch (err) {
     result.warnings.push(`写入 T3 的 Claude 模型列表失败: ${err.message}`);
@@ -125,7 +126,7 @@ function modelsSignature(models) {
       profile.defaultModel,
       profile.fastModel,
       (profile.models || [])
-        .map((model) => `${model.id}:${model.vision ? 1 : 0}:${model.reasoning ? 1 : 0}:${model.name || ''}`)
+        .map((model) => `${model.id}:${model.vision ? 1 : 0}:${model.reasoning ? 1 : 0}:${(model.efforts || []).join('+')}:${model.name || ''}`)
         .join(','),
       profile.contextWindow || 0,
       profile.openaiApi,

@@ -97,7 +97,7 @@ environment:
 - **T3 配对码**：按钮执行 `t3 pair`，解析配对链接并生成二维码；如果 T3 刚重启导致命令失败，会自动回退到 `t3.log` 里最后一次 `Pairing URL:`；另有“重启 T3”按钮；
 - **Agent 版本**：列出已安装/最新版本，逐个更新；
 - **浏览器 / CDP**：给所有 agent 统一配置外部 Chrome CDP，测试连接，安装/更新 `chrome-devtools-mcp`；
-- **第三方模型**：一份配置分配给多个 agent，支持任意多个模型，以及每个模型的“视觉 / 推理”能力标记；自动生成各自配置文件；
+- **第三方模型**：一份配置分配给多个 agent，支持任意多个模型，以及每个模型的“视觉”和“思考等级”能力标记（不同模型可以配置不同等级）；自动生成各自配置文件；
 - **Multica**：保存 server_url/app_url/token，登录、启停 daemon、看日志；
 - **日志**：T3 / Multica / 管理后台三个来源。
 
@@ -111,7 +111,7 @@ environment:
 |---|---|---|
 | Claude Code | `~/.claude/settings.json` + `~/.t3/userdata/settings.json` | `ANTHROPIC_BASE_URL`（指向本机代理）/ `ANTHROPIC_AUTH_TOKEN` / 模型；额外模型写 T3 的 `providerInstances.claudeAgent.config.customModels` |
 | Codex | `~/.codex/config.toml` + `~/.codex/agenthub-models.json` | 自定义 provider，`wire_api = "responses"`，`model_catalog_json` 提供选择器里的自定义模型 |
-| OpenCode | `~/.config/opencode/opencode.json` | `providers.agenthub` + `model` / `small_model` |
+| OpenCode | `~/.config/opencode/opencode.json` | `providers.agenthub`（含 `models[].variants`）+ `model` / `small_model` |
 | Pi | `~/.pi/agent/models.json` + `settings.json` | `agenthub` provider + 默认模型 |
 
 注意：
@@ -125,7 +125,12 @@ environment:
 - 给 Claude/Codex 分配了协议不兼容的配置时，会打警告并清掉后台之前写入的配置，不会继续沿用旧端点；
 - **默认模型、快速模型和“更多模型”都会写入各 agent 的模型列表**：OpenCode 用 `providers.agenthub.models` + `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`，Claude 用 T3 设置（见下条）。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现；
 - 每个模型可以勾选 **“视觉”**：OpenCode 写 `capabilities.input = ["text","image"]`，Pi 写 `input = ["text","image"]`，Codex 写 `input_modalities = ["text","image"]`。不勾选时按纯文本处理；Claude Code 没有对应开关，能否识图取决于模型和网关本身；
-- 每个模型可以勾选 **“推理”**：Pi 写 `reasoning: true`，T3 里才会出现思考等级选择；Claude 的自定义模型会在 T3 设置里生成 `effort` 选项，等级优先取网关 `/v1/models` 的 `reasoning_efforts`。OpenCode 的思考档位由 provider 的 `variants` 决定，这里不写；
+- 每个模型可以勾选 **“推理”** 并填写 **“思考等级”**（逗号分隔，留空表示不指定）：
+  - OpenCode 写进 `providers.agenthub.models[id].variants`（数组，每项 `settings.reasoningEffort`），T3 的 OpenCode 模型选择器据此显示等级；未勾选“推理”时写 `variants: []`，关掉 OpenCode 默认生成的等级；
+  - Pi 写 `reasoning: true` 和 `thinkingLevelMap`，只显示模型实际支持的等级；
+  - Claude 在 T3 设置的 `customModels` 里生成 `effort` 选项，显式等级优先，没填时取网关 `/v1/models` 的 `reasoning_efforts`；
+  - Codex 写 `model_catalog_json` 里的 `supported_reasoning_levels`，没填时沿用 Codex 模板能力；
+  - 各 agent 只接受自己支持的等级（Claude：`low/medium/high/xhigh/max`；Pi：`off/minimal/low/medium/high/xhigh/max`；Codex：`low/medium/high/xhigh/max/ultra`），其它值会被忽略并在保存结果里提示；OpenCode 按填写值原样生成 variant。
 - **Claude 的额外模型写进 T3 自己的设置**：`$T3CODE_HOME/userdata/settings.json` 的 `providerInstances.claudeAgent.config.customModels`（默认 `~/.t3/userdata/settings.json`）。T3 的 Claude 选择器只认这里，`ANTHROPIC_MODEL` 只决定主模型；该字段由后台整体管理；T3 会在下次 provider 状态刷新时读取，保存模型配置时后台也会重启 T3；
 - **Codex 的自定义模型会出现在 T3 选择器里**：后台写入 `~/.codex/agenthub-models.json` 并设置 `model_catalog_json`，条目由 `codex debug models --bundled` 生成（目录需要完整的 instructions，手写容易缺字段）；
 - 删除某个 agent 的分配后，后台会移除自己写入的 provider 配置。

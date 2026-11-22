@@ -10,23 +10,88 @@ export const AGENT_KEYS = ['claude', 'codex', 'opencode', 'pi'];
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MODEL_RE = /^[A-Za-z0-9._:/@+-]{1,160}$/;
+const EFFORT_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
+const MAX_EFFORTS = 12;
+const MAX_EFFORT_LENGTH = 32;
+
+// 各 agent 真正能表达的思考等级；配置里可以写任意值，但写入前按白名单过滤。
+// OpenCode 的 variant id 不受这个限制（由 OpenCode 自己解释）。
+export const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const CODEX_REASONING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 function fail(message) {
   throw new Error(message);
 }
 
+function normalizeEfforts(raw, profileId, modelId) {
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(/[\s,，、;；]+/)
+      : [];
+  const efforts = [];
+  for (const value of values) {
+    const effort = String(value || '').trim().toLowerCase();
+    if (!effort) continue;
+    if (!EFFORT_RE.test(effort) || effort.length > MAX_EFFORT_LENGTH) {
+      fail(`配置 ${profileId} 的模型 ${modelId} 思考等级不合法: ${effort}`);
+    }
+    if (!efforts.includes(effort)) efforts.push(effort);
+  }
+  if (efforts.length > MAX_EFFORTS) {
+    fail(`配置 ${profileId} 的模型 ${modelId} 最多配置 ${MAX_EFFORTS} 个思考等级`);
+  }
+  return efforts;
+}
+
+function mergeEfforts(left, right) {
+  const merged = Array.isArray(left) ? [...left] : [];
+  for (const effort of Array.isArray(right) ? right : []) {
+    if (!merged.includes(effort)) merged.push(effort);
+  }
+  return merged;
+}
+
 // 配置里的模型条目：id 是发给网关的真实模型 ID；name 只影响显示；
-// vision 表示该模型接受图片输入，reasoning 表示它支持思考等级。
-// 旧配置只有 defaultModel / fastModel，normalizeModels 会把它们补进列表。
+// vision 表示该模型接受图片输入；efforts 是该模型实际支持的思考等级。
+// reasoning 是旧字段，保留兼容：有 efforts 时自动视为支持推理。
 function normalizeModelEntry(raw, profileId) {
   const id = String(raw?.id ?? raw ?? '').trim();
   if (!id) return null;
   if (!MODEL_RE.test(id)) fail(`配置 ${profileId} 的模型 ID 不合法: ${id}`);
+  const efforts = normalizeEfforts(raw?.efforts, profileId, id);
   return {
     id,
     name: String(raw?.name || '').trim(),
     vision: raw?.vision === true,
-    reasoning: raw?.reasoning === true,
+    reasoning: raw?.reasoning === true || efforts.length > 0,
+    efforts,
+  };
+}
+
+// 某个 agent 不能表达的等级不写进它的配置，避免把上游不认识的参数发过去。
+function filterEfforts(model, allowed, agentName, warnings) {
+  if (!Array.isArray(model.efforts) || model.efforts.length === 0) return null;
+  const supported = model.efforts.filter((effort) => allowed.includes(effort));
+  const ignored = model.efforts.filter((effort) => !allowed.includes(effort));
+  if (ignored.length) {
+    warnings.push(`${agentName}：模型 ${model.id} 不支持思考等级 ${ignored.join(', ')}，已忽略。`);
+  }
+  return supported;
+}
+
+// Pi 的思考等级是固定枚举；thinkingLevelMap 里设为 null 的等级不会出现在 T3。
+function piThinkingFields(model, warnings) {
+  if (!Array.isArray(model.efforts) || model.efforts.length === 0) {
+    return model.reasoning ? { reasoning: true } : {};
+  }
+  const efforts = filterEfforts(model, PI_THINKING_LEVELS, 'Pi', warnings);
+  if (!efforts || efforts.length === 0) return {};
+  return {
+    reasoning: true,
+    thinkingLevelMap: Object.fromEntries(
+      PI_THINKING_LEVELS.map((level) => [level, efforts.includes(level) ? level : null]),
+    ),
   };
 }
 
@@ -82,8 +147,9 @@ export function normalizeModels(input) {
         profile.models.push(entry);
         return;
       }
+      existing.efforts = mergeEfforts(existing.efforts, entry.efforts);
       existing.vision = existing.vision || entry.vision;
-      existing.reasoning = existing.reasoning || entry.reasoning;
+      existing.reasoning = existing.reasoning || entry.reasoning || existing.efforts.length > 0;
       existing.name = existing.name || entry.name;
     };
     addModel(normalizeModelEntry({ id: profile.defaultModel }, profile.id));
@@ -150,7 +216,8 @@ function modelEntries(profile) {
       id,
       name: String(entry?.name || '').trim(),
       vision: entry?.vision === true,
-      reasoning: entry?.reasoning === true,
+      reasoning: entry?.reasoning === true || (Array.isArray(entry?.efforts) && entry.efforts.length > 0),
+      efforts: Array.isArray(entry?.efforts) ? [...entry.efforts] : [],
     });
   }
   return list;
@@ -185,12 +252,34 @@ function codexCatalogTemplate() {
   return codexCatalogTemplateCache;
 }
 
-function codexCatalog(profile) {
+const CODEX_EFFORT_DESCRIPTIONS = {
+  low: 'Fast responses with lighter reasoning',
+  medium: 'Balances speed and reasoning depth for everyday tasks',
+  high: 'Greater reasoning depth for complex problems',
+  xhigh: 'Extra high reasoning depth for complex problems',
+  max: 'Maximum reasoning depth for the hardest problems',
+  ultra: 'Maximum reasoning with automatic task delegation',
+};
+
+function codexCatalog(profile, warnings) {
   const template = codexCatalogTemplate();
   if (!template) return null;
   return {
     models: modelEntries(profile).map((model, index) => {
       const contextWindow = profile.contextWindow || 200000;
+      // 只有显式配置了等级才覆盖 Codex 模板；没填时沿用模板里的默认能力。
+      const efforts = filterEfforts(model, CODEX_REASONING_LEVELS, 'Codex', warnings);
+      const reasoningFields = efforts === null
+        ? {}
+        : {
+            supported_reasoning_levels: efforts.map((effort) => ({
+              effort,
+              description: CODEX_EFFORT_DESCRIPTIONS[effort] || effort,
+            })),
+            default_reasoning_level: efforts.includes('medium')
+              ? 'medium'
+              : (efforts[0] || template.default_reasoning_level),
+          };
       return {
         ...template,
         slug: model.id,
@@ -209,6 +298,7 @@ function codexCatalog(profile) {
         upgrade: null,
         availability_nux: null,
         model_specialty: null,
+        ...reasoningFields,
       };
     }),
   };
@@ -305,7 +395,7 @@ export function applyModelConfig(models) {
     if (usable) {
       // Codex 的模型选择器来自 app-server 的 model/list；只写 config.toml 的 model
       // 不会让自定义模型出现在列表里。model_catalog_json 可以补上自定义模型和名称。
-      const catalog = codexCatalog(profile);
+      const catalog = codexCatalog(profile, warnings);
       if (catalog) {
         writeJson(catalogFile, catalog, 0o600);
         doc.model_catalog_json = catalogRef;
@@ -367,6 +457,42 @@ export function applyModelConfig(models) {
           : '@opencode/ai/providers/openai-compatible/responses';
 
       const entries = modelEntries(profile);
+      // OpenCode 给 OpenAI Responses 模型生成的默认 variant 会带上 summary/include；
+      // 我们显式覆盖 variants 时补上同样的字段，避免丢掉推理摘要和加密推理内容。
+      const variantSettings = (effort) => ({
+        reasoningEffort: effort,
+        ...(profile.protocol !== 'anthropic' && profile.openaiApi === 'responses'
+          ? { reasoningSummary: 'auto', include: ['reasoning.encrypted_content'] }
+          : {}),
+      });
+      const models = Object.fromEntries(entries.map((model) => {
+        if (model.reasoning && model.efforts.length === 0) {
+          warnings.push(
+            `OpenCode：模型 ${model.id} 未填写思考等级，将使用 OpenCode 自动生成的默认 variant；请按网关 reasoning_efforts 填写，避免出现模型不支持的等级。`,
+          );
+        }
+        return [
+          model.id,
+          {
+            name: model.name || model.id,
+            // OpenCode 用 capabilities.input 判断模型能否接收图片；不写则按纯文本处理。
+            ...(model.vision ? { capabilities: { input: ['text', 'image'] } } : {}),
+            // OpenCode 的 variant 会作为 T3 的等级选项；settings.reasoningEffort
+            // 是 OpenAI 兼容 provider 的标准字段，由 OpenCode 合并进请求。
+            // 显式写 [] 可以关掉 OpenCode 自己生成的默认 low/medium/high。
+            ...(model.efforts.length
+              ? {
+                  variants: model.efforts.map((effort) => ({
+                    id: effort,
+                    settings: variantSettings(effort),
+                  })),
+                }
+              : model.reasoning
+                ? {}
+                : { variants: [] }),
+          },
+        ];
+      }));
       doc.providers.agenthub = {
         name: profile.name,
         package: pkg,
@@ -374,14 +500,7 @@ export function applyModelConfig(models) {
           baseURL: profile.protocol === 'anthropic' ? resolveAnthropicBase(profile) : profile.baseUrl,
           ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
         },
-        models: Object.fromEntries(entries.map((model) => [
-          model.id,
-          {
-            name: model.name || model.id,
-            // OpenCode 用 capabilities.input 判断模型能否接收图片；不写则按纯文本处理。
-            ...(model.vision ? { capabilities: { input: ['text', 'image'] } } : {}),
-          },
-        ])),
+        models,
       };
       doc.model = `agenthub/${profile.defaultModel}`;
       if (profile.fastModel && profile.fastModel !== profile.defaultModel) {
@@ -430,8 +549,9 @@ export function applyModelConfig(models) {
           name: model.name || model.id,
           // Pi 的自定义模型默认按纯文本处理；显式写 image 才会把图片传给模型。
           ...(model.vision ? { input: ['text', 'image'] } : {}),
-          // T3 的 Pi 驱动只有在模型声明 reasoning 时才显示思考等级选择。
-          ...(model.reasoning ? { reasoning: true } : {}),
+          // T3 的 Pi 驱动会读 reasoning 和 thinkingLevelMap；后者用来隐藏
+          // 该模型实际不支持的等级（null 表示不支持）。
+          ...piThinkingFields(model, warnings),
         })),
       };
       writeJson(modelsFile, modelsDoc, 0o600);

@@ -98,7 +98,11 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 - OpenCode / Pi 两种协议都支持。
 - **默认模型、快速模型和额外模型都要写进模型列表**：配置里的 `models[]` 是完整列表（`normalizeModels` 会把 `defaultModel` / `fastModel` 自动补进去）。OpenCode 用 `providers.agenthub.models` + 顶层 `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现。
 - **视觉能力按模型声明**：勾选“视觉”时写 OpenCode `capabilities.input = ["text","image"]`、Pi `input = ["text","image"]`、Codex `input_modalities = ["text","image"]`。不勾选就不写，按纯文本处理；不要假设 agent 会自己探测网关模型的图片能力。Claude Code 没有对应配置项。
-- **思考等级按模型声明**：勾选“推理”时，Pi 写 `reasoning: true`（T3 的 Pi 驱动只有看到这个字段才显示思考等级）；Claude 的对应模型会在 T3 设置里生成 `effort` 选项，等级优先取网关 `/v1/models` 的 `reasoning_efforts`，取不到时用 `low/high/max` 兜底。OpenCode 的思考档位来自 provider 的 `variants`，这里不写。
+- **思考等级按模型声明**：每个模型条目可以填写 `efforts[]`（后台 UI 里是逗号分隔的“思考等级”），不同模型可以完全不同。勾选“推理”但没有填等级时，各 agent 使用自己的默认能力；填写后按 agent 白名单过滤，未识别的等级会忽略并给出警告。
+  - OpenCode 写进 `providers.agenthub.models[id].variants`，形如 `[{ id, settings: { reasoningEffort } }]`；T3 从 OpenCode 的 `model.variants` 生成“Reasoning”选项。**OpenCode v2 的 `variants` 必须是数组，写成对象会让整个 provider 校验失败**。模型未勾选“推理”时写 `variants: []`，显式关掉 OpenCode 自己生成的默认 `low/medium/high`。
+  - Pi 写 `reasoning: true` + `thinkingLevelMap`；`thinkingLevelMap[level] = null` 表示该等级不支持。Pi 只认 `off/minimal/low/medium/high/xhigh/max`。
+  - Claude 在 T3 设置的 `customModels.capabilities.optionDescriptors` 里生成 `effort` 选项；只认 `low/medium/high/xhigh/max`。显式等级优先，没填时优先取网关 `/v1/models` 的 `reasoning_efforts`，取不到时用 `low/high/max` 兜底。
+  - Codex 在 `model_catalog_json` 的条目里写 `supported_reasoning_levels` 和 `default_reasoning_level`；只认 `low/medium/high/xhigh/max/ultra`。没填等级时沿用 `codex debug models --bundled` 模板里的能力，不覆盖。
 - **Claude 的额外模型必须写 T3 设置**：T3 的 Claude 选择器只从 CLI 探测结果和 `providerInstances.claudeAgent.config.customModels` 取模型，`ANTHROPIC_MODEL` 只能决定主模型。`admin/lib/t3-models.js` 会写 `$T3CODE_HOME/userdata/settings.json`（默认 `~/.t3/userdata/settings.json`），按当前配置**整体替换** hub 管理的 `customModels`；取消 Claude 分配时清空。该字段由 Agent Hub 独占管理，不要在里面手工加模型。T3 会在下次 provider 状态刷新时读取（实测写入后约 20 秒出现在缓存里）；保存模型配置时 `server.js` 仍会重启 T3 以确保刷新。
 - Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入。**新增、替换或取消 Codex 分配后必须重启 T3**，否则旧 key 会残留；`server.js` 已有这段逻辑，改动时不要破坏。
 - 保存模型配置后 `server.js` 会重启 T3 并等待就绪（`waitForT3Ready`）；T3 的模型列表在启动时读取，不重启不会刷新。

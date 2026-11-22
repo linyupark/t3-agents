@@ -95,10 +95,13 @@
   .profile-head strong { font-size: 13px; }
   .models-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 12px 0 2px; }
   .models-head label { margin: 0; }
-  .model-row { display: grid; grid-template-columns: 1.4fr 1fr auto auto; gap: 8px; align-items: center; margin-top: 6px; }
+  .model-row { display: grid; grid-template-columns: 1.3fr .9fr 1.2fr auto auto; gap: 8px; align-items: center; margin-top: 6px; }
   .model-row input[type="checkbox"] { width: auto; }
   .model-flags { display: flex; gap: 10px; }
   .model-check { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 12px; white-space: nowrap; }
+  .model-extras { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+  .model-extras input[type="text"] { flex: 1; min-width: 150px; }
+  .hint code { color: var(--text); }
   .assignments { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
   .qr { width: 240px; max-width: 100%; background: #fff; border-radius: 10px; padding: 8px; }
   .qr svg { display: block; width: 100%; height: auto; }
@@ -169,8 +172,12 @@
       （例如 DeepSeek 的 <code>https://api.deepseek.com/anthropic</code>）。
       Codex 需要 OpenAI Responses；OpenCode / Pi 两种都支持。
       保存后会自动写入各 agent 的配置文件。默认、快速和“更多模型”都会写进 OpenCode / Pi / Codex / Claude 的模型列表；
-      勾选“视觉”表示该模型接受图片输入；勾选“推理”会让 Pi 显示思考等级、并按网关返回的等级给 Claude 生成 effort 选项
-      （官方的真实能力以网关 /v1/models 为准，不要凭猜测勾选）。
+      勾选“视觉”表示该模型接受图片输入；勾选“推理”表示该模型支持思考等级。
+      “思考等级”按模型填写，逗号分隔，例如 <code>low,medium,high</code>；留空表示不给这个模型配置等级。
+      不同 agent 能表达的等级不同：Claude 用 <code>low,medium,high,xhigh,max</code>，Pi 用
+      <code>off,minimal,low,medium,high,xhigh,max</code>，Codex 用 <code>low,medium,high,xhigh,max,ultra</code>，
+      OpenCode 按填写的值原样生成 variant；其它值会被忽略并给出警告。
+      不确定某个模型支持哪些等级时，以网关 <code>/v1/models</code> 返回的 <code>reasoning_efforts</code> 为准。
       Codex 的自定义模型会通过 model_catalog_json 出现在选择器里。
     </p>
     <div id="profiles"></div>
@@ -376,7 +383,7 @@ function field(labelText, type, value, dataName, options, extra) {
   return wrap;
 }
 
-function visionCheck(checked, dataName) {
+function flagCheck(checked, dataName, text) {
   const label = document.createElement('label');
   label.className = 'model-check';
   label.style.marginTop = '6px';
@@ -386,8 +393,44 @@ function visionCheck(checked, dataName) {
   input.dataset.f = dataName;
   input.checked = checked === true;
 
-  label.append(input, document.createTextNode('视觉（接受图片输入）'));
+  label.append(input, document.createTextNode(text));
   return label;
+}
+
+function visionCheck(checked, dataName) {
+  return flagCheck(checked, dataName, '视觉（接受图片输入）');
+}
+
+function reasoningCheck(checked, dataName) {
+  return flagCheck(checked, dataName, '推理（支持思考等级）');
+}
+
+// 默认 / 快速模型没有独立的“更多模型”行，能力开关和等级输入放在字段下面。
+function modelExtras({ vision, reasoning, efforts, prefix }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'model-extras';
+  wrap.append(
+    visionCheck(vision, `${prefix}Vision`),
+    reasoningCheck(reasoning, `${prefix}Reasoning`),
+  );
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.dataset.f = `${prefix}Efforts`;
+  input.placeholder = '思考等级，如 low,medium,high';
+  input.title = '该模型实际支持的思考等级，逗号分隔；留空表示不指定';
+  input.value = (efforts || []).join(',');
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function parseEfforts(value) {
+  const efforts = [];
+  for (const part of String(value || '').split(/[\s,，、;；]+/)) {
+    const effort = part.trim().toLowerCase();
+    if (effort && !efforts.includes(effort)) efforts.push(effort);
+  }
+  return efforts;
 }
 
 function appendModelRow(container, entry) {
@@ -404,6 +447,12 @@ function appendModelRow(container, entry) {
   name.dataset.m = 'name';
   name.placeholder = '显示名称（可选）';
   name.value = entry.name || '';
+
+  const efforts = document.createElement('input');
+  efforts.dataset.m = 'efforts';
+  efforts.placeholder = '思考等级，如 low,medium,high（留空=不支持）';
+  efforts.title = '该模型实际支持的思考等级，逗号分隔；留空表示不指定';
+  efforts.value = Array.isArray(entry.efforts) ? entry.efforts.join(',') : '';
 
   const flags = document.createElement('div');
   flags.className = 'model-flags';
@@ -424,7 +473,7 @@ function appendModelRow(container, entry) {
   remove.textContent = '删除';
   remove.onclick = () => row.remove();
 
-  row.append(id, name, flags, remove);
+  row.append(id, name, efforts, flags, remove);
   container.appendChild(row);
 }
 
@@ -489,11 +538,21 @@ function renderProfiles() {
     grid3.className = 'grid2';
     grid3.style.marginTop = '10px';
     const profileModels = Array.isArray(profile.models) ? profile.models : [];
-    const defaultVision = profileModels.find((model) => model.id === profile.defaultModel)?.vision === true;
-    const fastVision = profileModels.find((model) => model.id === profile.fastModel)?.vision === true;
+    const defaultEntry = profileModels.find((model) => model.id === profile.defaultModel) || {};
+    const fastEntry = profileModels.find((model) => model.id === profile.fastModel) || {};
     grid3.append(
-      field('默认模型 ID', 'text', profile.defaultModel, 'defaultModel', undefined, visionCheck(defaultVision, 'defaultVision')),
-      field('快速模型 ID（可选）', 'text', profile.fastModel, 'fastModel', undefined, visionCheck(fastVision, 'fastVision')),
+      field('默认模型 ID', 'text', profile.defaultModel, 'defaultModel', undefined, modelExtras({
+        vision: defaultEntry.vision === true,
+        reasoning: defaultEntry.reasoning === true,
+        efforts: defaultEntry.efforts,
+        prefix: 'default',
+      })),
+      field('快速模型 ID（可选）', 'text', profile.fastModel, 'fastModel', undefined, modelExtras({
+        vision: fastEntry.vision === true,
+        reasoning: fastEntry.reasoning === true,
+        efforts: fastEntry.efforts,
+        prefix: 'fast',
+      })),
     );
 
     const grid4 = document.createElement('div');
@@ -576,23 +635,42 @@ function collectProfiles() {
     const defaultModel = value('defaultModel').trim();
     const fastModel = value('fastModel').trim();
     const list = [...el.querySelectorAll('[data-model-row]')]
-      .map((row) => ({
-        id: row.querySelector('[data-m="id"]').value.trim(),
-        name: row.querySelector('[data-m="name"]').value.trim(),
-        vision: row.querySelector('[data-m="vision"]').checked,
-        reasoning: row.querySelector('[data-m="reasoning"]').checked,
-      }))
+      .map((row) => {
+        const efforts = parseEfforts(row.querySelector('[data-m="efforts"]').value);
+        return {
+          id: row.querySelector('[data-m="id"]').value.trim(),
+          name: row.querySelector('[data-m="name"]').value.trim(),
+          vision: row.querySelector('[data-m="vision"]').checked,
+          reasoning: row.querySelector('[data-m="reasoning"]').checked || efforts.length > 0,
+          efforts,
+        };
+      })
       .filter((model) => model.id);
 
-    // 默认 / 快速模型没有独立行，用它们旁边的“视觉”勾选框补进列表。
-    for (const [id, vision] of [
-      [defaultModel, checked('defaultVision')],
-      [fastModel, checked('fastVision')],
+    // 默认 / 快速模型没有独立行，用它们旁边的能力开关和等级输入补进列表。
+    const mergeInto = (entry) => {
+      const existing = list.find((model) => model.id === entry.id);
+      if (!existing) {
+        list.push(entry);
+        return;
+      }
+      existing.vision = existing.vision || entry.vision;
+      existing.reasoning = existing.reasoning || entry.reasoning;
+      existing.efforts = [...new Set([...(existing.efforts || []), ...entry.efforts])];
+      if (!existing.name) existing.name = entry.name;
+    };
+    for (const [id, vision, reasoning, efforts] of [
+      [defaultModel, checked('defaultVision'), checked('defaultReasoning'), parseEfforts(value('defaultEfforts'))],
+      [fastModel, checked('fastVision'), checked('fastReasoning'), parseEfforts(value('fastEfforts'))],
     ]) {
       if (!id) continue;
-      const existing = list.find((model) => model.id === id);
-      if (existing) existing.vision = existing.vision || vision;
-      else list.push({ id, name: '', vision });
+      mergeInto({
+        id,
+        name: '',
+        vision,
+        reasoning: reasoning || efforts.length > 0,
+        efforts,
+      });
     }
 
     return {
