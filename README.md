@@ -38,6 +38,18 @@ docker compose up -d --build
 
 关于目录：`WORKSPACE_DIR`、`CONFIG_DIR` 只影响宿主机侧挂载，容器内仍然是 `/workspace`、`/root/.codex` 等固定路径。换目录不会自动搬迁旧数据，需要先把原来的 `workspace/`、`config/` 内容拷到新位置；建议先 `docker compose down` 再操作。自定义目录如果放在项目内，记得同时加入 `.gitignore` 和 `.dockerignore`，避免被提交或进入 Docker build context。
 
+### Docker 命名
+
+| 对象 | 名称 |
+|---|---|
+| 镜像 | `agent-hub/t3-agents` |
+| Compose 服务 / 容器 | `t3code` |
+| 命名卷 | `agent_npm` / `agent_local`（Compose 会自动加项目前缀） |
+
+`agent-hub/t3code-only` 是旧项目遗留的镜像名，已统一为仓库名 `agent-hub/t3-agents`；下次 `docker compose up -d --build` 会构建新名字。旧的本地镜像不会自动删除，确认不用后可以执行 `docker image rm agent-hub/t3code-only`。
+
+命名卷故意保留原名：Docker 只在卷首次创建时从镜像初始化，改名会让容器挂到一个全新的空卷，已安装的 agent 和工具需要重装。
+
 ## 这次改了什么
 
 ### 1. 容器重建不再重装 agent

@@ -100,6 +100,7 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 ### 6. Docker / 持久化
 
 - 命名卷 `agent_npm`、`agent_local` 只在**首次创建**时从镜像初始化。给镜像新增 npm 包后，老卷不会自动出现；要么放到镜像内的 `/usr/local`，要么在后台提供安装按钮，并在 README 说明。
+- Docker 命名统一为：镜像 `agent-hub/t3-agents`，Compose 服务/容器 `t3code`，命名卷 `agent_npm` / `agent_local`。不要重命名命名卷，改名会让容器挂到全新的空卷，已有安装数据会“消失”。
 - 修改安装开关、想从镜像重新灌包：`docker compose down -v`（只删这两个命名卷，不影响 bind mount）。
 - Compose 需要 ≥ 2.24（`env_file` 的 `required: false`）。
 - 不要把宿主机的 `docker.sock` 挂进来。

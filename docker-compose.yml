@@ -12,7 +12,8 @@ services:
         INSTALL_PI: "true"           # Pi coding agent
         INSTALL_MULTICA: "true"      # Multica CLI + daemon
         INSTALL_CDP_MCP: "true"      # chrome-devtools-mcp（统一 CDP）
-    image: agent-hub/t3code-only
+    # 镜像名与仓库 t3-agents 对齐；容器名 t3code 表示主服务
+    image: agent-hub/t3-agents
     container_name: t3code
     restart: unless-stopped
     init: true
