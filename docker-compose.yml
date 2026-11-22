@@ -1,0 +1,111 @@
+services:
+  t3code:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 按需开关 agent CLI 的安装
+        INSTALL_T3: "true"
+        INSTALL_CLAUDE: "true"
+        INSTALL_CODEX: "true"
+        INSTALL_OPENCODE: "true"
+        INSTALL_PI: "true"           # Pi coding agent
+        INSTALL_MULTICA: "true"      # Multica CLI + daemon
+        INSTALL_CDP_MCP: "true"      # chrome-devtools-mcp（统一 CDP）
+    image: agent-hub/t3code-only
+    container_name: t3code
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    env_file:
+      - .env.example
+      # 复制 .env.example 为 .env 后会优先加载本地覆盖
+      - path: .env
+        required: false
+    volumes:
+      # 共享工作区（agent 在这里读写代码）
+      - ./workspace:/workspace
+
+      # 各 agent 配置持久化
+      - ./config/codex:/root/.codex
+      - ./config/claude:/root/.claude
+      - ./config/opencode:/root/.config/opencode
+      - ./config/pi:/root/.pi
+      - ./config/gemini:/root/.gemini
+      - ./config/t3:/root/.t3
+
+      # Multica CLI 的登录态 / daemon 配置 / 日志
+      - ./config/multica:/root/.multica
+
+      # 管理后台自己的设置（模型配置、Multica token 等）
+      - ./config/admin:/root/.agent-hub
+
+      # 后台与各进程日志
+      - ./config/logs:/var/log/agent-hub
+
+      # SSH 密钥（T3 Code 远程环境连接用）
+      - ./config/ssh:/root/.ssh
+
+      # Git 全局配置
+      - ./config/git/gitconfig:/root/.gitconfig:ro
+
+      # agent 缓存（pip/uv/playwright/go-build 等），重建容器不丢
+      - ./config/cache:/root/.cache
+
+      # npm 缓存（全局包更新用），避免反复下载
+      - ./config/npm:/root/.npm
+
+      # 临时目录落到宿主机，避免 agent 的临时文件撑大容器可写层
+      - ./workspace/.tmp:/tmp
+      - ./workspace/.tmp/var-tmp:/var/tmp
+
+      # 全局共享 skills：Codex / OpenCode / Pi 原生读取 ~/.agents/skills
+      - ./workspace/.agents:/root/.agents
+      # Claude Code 只读 ~/.claude/skills，单独挂同一份目录
+      - ./workspace/.agents/skills:/root/.claude/skills
+
+      # 全局 npm 包持久化：docker compose down/up 后不再重装
+      - agent_npm:/opt/agents
+      # agent 自行安装的 user-level 工具（pipx/uv 等）
+      - agent_local:/root/.local
+
+    environment:
+      - NODE_ENV=production
+      # Claude Code / Multica 在 root 下允许 bypassPermissions 的官方开关
+      - IS_SANDBOX=1
+      # 把 Claude 全局状态文件放进持久化目录，避免文件级 bind mount 与原子写入冲突
+      - CLAUDE_CONFIG_DIR=/root/.claude
+      # root 容器无法启用 Chrome sandbox；T3 内置预览浏览器必须关闭它
+      - T3CODE_SERVER_BROWSER_SANDBOX=0
+      - T3_PORT=${T3_PORT:-3773}
+      - ADMIN_PORT=${ADMIN_PORT:-3774}
+      - ADMIN_BIND=${ADMIN_BIND:-0.0.0.0}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - AUTOSTART_MULTICA=${AUTOSTART_MULTICA:-1}
+      - MULTICA_WORKSPACES_ROOT=/workspace/.multica-workspaces
+      # 避免 daemon 自行升级导致行为漂移；升级请在后台点按钮
+      - MULTICA_DAEMON_AUTO_UPDATE=0
+      - MULTICA_BIN_DIR=/opt/agents/bin
+      - DATA_DIR=/root/.agent-hub
+      - LOG_DIR=/var/log/agent-hub
+
+    # 子进程 supervisor 需要时间按进程组停止 t3/multica
+    stop_grace_period: 20s
+
+    # Docker 默认 /dev/shm 只有 64MB，Chrome 渲染大页面容易崩
+    shm_size: 1g
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${ADMIN_PORT:-3774}/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # deploy.resources 在非 swarm compose 中不生效；用 mem_limit 才有内存保护
+    mem_limit: 6g
+    memswap_limit: 6g
+
+volumes:
+  agent_npm:
+  agent_local:

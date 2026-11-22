@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Agent Hub</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #11171f;
+    --panel-2: #151d27;
+    --line: #233040;
+    --text: #dbe4ee;
+    --muted: #8796a8;
+    --accent: #4cc2ff;
+    --green: #37d67a;
+    --red: #ff5c6c;
+    --amber: #f2b84b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 20% -10%, #14263a 0%, var(--bg) 55%) fixed;
+    color: var(--text);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 22px 28px 10px;
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 999px; padding: 5px 11px; font-size: 12px; color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.running { background: var(--green); box-shadow: 0 0 8px rgba(55,214,122,.7); }
+  .dot.crashed, .dot.error { background: var(--red); }
+  .dot.starting { background: var(--amber); }
+  main {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px; padding: 12px 28px 32px; max-width: 1400px; margin: 0 auto;
+  }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; min-width: 0;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 15px; }
+  .card .hint { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+  .card.wide { grid-column: 1 / -1; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row.end { justify-content: flex-end; }
+  button {
+    appearance: none; border: 1px solid #2e4258; background: #182535; color: var(--text);
+    border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: #3d5a78; background: #1d2c3e; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: #0f4c6e; border-color: #1b6b95; }
+  button.primary:hover { background: #135f88; }
+  button.danger { color: #ffc3c9; border-color: #5b2a33; background: #2a161b; }
+  input, select {
+    width: 100%; background: #0d131a; color: var(--text);
+    border: 1px solid #26384b; border-radius: 8px; padding: 7px 9px; font-size: 13px;
+  }
+  input:focus, select:focus { outline: 1px solid #2f6f95; border-color: #2f6f95; }
+  label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+  .field { min-width: 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1c2734; font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+  td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre {
+    margin: 10px 0 0; padding: 10px 12px; background: #080c11; border: 1px solid #1c2734;
+    border-radius: 8px; color: #b9c6d5; font-size: 12px; line-height: 1.45;
+    max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.tall { max-height: 360px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--green); }
+  .bad { color: var(--red); }
+  .profile {
+    border: 1px solid #22303f; border-radius: 10px; padding: 12px; margin-bottom: 10px;
+    background: #0f161e;
+  }
+  .profile-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .profile-head strong { font-size: 13px; }
+  .assignments { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
+  .qr { width: 240px; max-width: 100%; background: #fff; border-radius: 10px; padding: 8px; }
+  .qr svg { display: block; width: 100%; height: auto; }
+  a { color: var(--accent); }
+  .pair-out { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .pair-out .linkbox { min-width: 220px; flex: 1; }
+  .hidden { display: none !important; }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; padding: 10px 14px 28px; }
+    header { padding: 18px 14px 6px; }
+    .assignments { grid-template-columns: repeat(2, 1fr); }
+    .grid3 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Agent Hub</h1>
+    <p>T3 Code 控制面 + agent CLI + Multica runtime</p>
+  </div>
+  <div class="pills">
+    <span class="pill"><span class="dot" id="t3dot"></span>T3 <span id="t3state">…</span></span>
+    <span class="pill"><span class="dot" id="mdot"></span>Multica <span id="mstate">…</span></span>
+    <span class="pill">管理端口 <span id="adminPort">…</span></span>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>T3 Code</h2>
+    <p class="hint">生成一次性配对链接，手机或另一台设备扫码即可接入。</p>
+    <div class="row">
+      <button class="primary" id="pairBtn">获取配对码</button>
+      <button id="t3RestartBtn">重启 T3</button>
+      <span class="muted" id="t3info"></span>
+    </div>
+    <div class="pair-out" id="pairOut">
+      <div class="qr hidden" id="qr"></div>
+      <div class="linkbox">
+        <p class="muted" id="pairHint"></p>
+        <a id="pairLink" class="hidden" target="_blank" rel="noreferrer"></a>
+        <pre class="hidden" id="pairRaw"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Agent / 工具</h2>
+    <p class="hint">npm 全局包持久化在 /opt/agents 卷中，容器重建不会重装；Chrome DevTools MCP 也在这里升级。</p>
+    <div class="row end" style="margin-bottom:6px">
+      <button id="agentsRefresh">刷新版本</button>
+    </div>
+    <table>
+      <thead><tr><th>Agent</th><th>已安装</th><th>最新</th><th></th></tr></thead>
+      <tbody id="agentsBody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+    </table>
+    <pre class="hidden" id="agentsOut"></pre>
+  </section>
+
+  <section class="card wide">
+    <h2>第三方模型</h2>
+    <p class="hint">
+      一个配置可以分配给多个 agent。Claude Code 需要 Anthropic 兼容端点；Codex 需要 OpenAI Responses；
+      OpenCode / Pi 两种都支持。保存后会自动写入各 agent 的配置文件。
+    </p>
+    <div id="profiles"></div>
+    <div class="row">
+      <button id="addProfile">+ 新增模型配置</button>
+    </div>
+    <div class="assignments" id="assignments"></div>
+    <div class="row">
+      <button class="primary" id="saveModels">保存并应用</button>
+      <span class="muted">Codex 通过环境变量取 key，保存后会自动重启 T3。</span>
+    </div>
+    <pre class="hidden" id="modelsOut"></pre>
+  </section>
+
+  <section class="card wide">
+    <h2>浏览器 / CDP</h2>
+    <p class="hint">
+      给 Claude Code / Codex / OpenCode / Pi 统一写入 chrome-devtools MCP，连接现有的 Chrome CDP。
+      保存后新会话生效；T3 自带的预览浏览器使用内置 Chrome，不能改接外部 CDP。
+    </p>
+    <div class="grid2">
+      <div class="field"><label>CDP 地址</label><input id="cdpUrl" placeholder="http://127.0.0.1:16002"></div>
+      <div class="field" style="display:flex;align-items:flex-end">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text)">
+          <input type="checkbox" id="cdpEnabled" style="width:auto"> 启用并写入所有 agent
+        </label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="cdpSave">保存并应用</button>
+      <button id="cdpTest">测试连接</button>
+      <button id="cdpInstall">安装/更新 MCP</button>
+    </div>
+    <p class="muted" id="cdpInfo" style="margin:10px 0 0;white-space:pre-line"></p>
+    <pre class="hidden" id="cdpOut"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Multica</h2>
+    <p class="hint">登录态保存在 ~/.multica，容器重启后自动恢复配置并拉起 daemon。</p>
+    <div class="grid2">
+      <div class="field"><label>server_url</label><input id="mServer" placeholder="https://bot-api.example.com:2081"></div>
+      <div class="field"><label>app_url</label><input id="mApp" placeholder="https://bots.example.com:2081"></div>
+    </div>
+    <div class="grid2" style="margin-top:10px">
+      <div class="field"><label>个人 token</label><input id="mToken" type="password" placeholder="mul_..."></div>
+      <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text)">
+          <input type="checkbox" id="mAuto" style="width:auto"> 随容器自动启动 daemon
+        </label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="mSave">保存并应用</button>
+      <button id="mLogin">重新登录</button>
+      <button id="mStart">启动 daemon</button>
+      <button id="mStop">停止</button>
+      <button id="mRestart">重启</button>
+      <button id="mInstall">安装/升级 CLI</button>
+    </div>
+    <p class="muted" id="mInfo" style="margin:10px 0 0"></p>
+    <pre class="hidden" id="mOut"></pre>
+  </section>
+
+  <section class="card">
+    <h2>日志</h2>
+    <p class="hint">实时查看 T3 / Multica / 管理进程输出。</p>
+    <div class="row">
+      <select id="logSource" style="width:auto">
+        <option value="t3">T3 Code</option>
+        <option value="multica">Multica daemon</option>
+        <option value="admin">管理后台</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--muted)">
+        <input type="checkbox" id="logPause" style="width:auto"> 暂停
+      </label>
+      <button id="logRefresh">立即刷新</button>
+    </div>
+    <pre class="tall" id="logPre">加载中…</pre>
+  </section>
+</main>
+
+<script>
+const $ = (selector) => document.querySelector(selector);
+
+async function api(url, options = {}) {
+  const opts = { ...options };
+  opts.headers = { 'content-type': 'application/json', ...(options.headers || {}) };
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function setPill(dotId, stateId, state, extra) {
+  const dot = $(`#${dotId}`);
+  dot.className = `dot ${state || ''}`;
+  $(`#${stateId}`).textContent = extra ? `${state} · ${extra}` : state;
+}
+
+function show(pre, text) {
+  pre.classList.remove('hidden');
+  pre.textContent = text;
+}
+
+async function loadStatus() {
+  try {
+    const s = await api('/api/status');
+    setPill('t3dot', 't3state', s.t3.state, s.t3.pid ? `pid ${s.t3.pid}` : '');
+    setPill('mdot', 'mstate', s.multica.state, s.multica.pid ? `pid ${s.multica.pid}` : '');
+    $('#adminPort').textContent = s.adminPort;
+    $('#t3info').textContent = `:${s.t3Port}`;
+  } catch (err) {
+    setPill('t3dot', 't3state', 'unknown', '');
+    $('#t3info').textContent = err.message;
+  }
+}
+
+async function loadAgents() {
+  try {
+    const { agents } = await api('/api/agents');
+    const body = $('#agentsBody');
+    body.textContent = '';
+    for (const agent of agents) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = agent.name;
+      name.title = agent.package || agent.binary;
+      const installed = document.createElement('td');
+      installed.className = 'mono';
+      installed.textContent = agent.installed || '—';
+      const latest = document.createElement('td');
+      latest.className = 'mono';
+      latest.textContent = agent.latest || '—';
+      if (agent.latest && agent.installed && agent.latest !== agent.installed) latest.classList.add('ok');
+      const action = document.createElement('td');
+      action.style.textAlign = 'right';
+      if (agent.canUpdate) {
+        const btn = document.createElement('button');
+        btn.textContent = '更新';
+        btn.onclick = async () => {
+          btn.disabled = true;
+          show($('#agentsOut'), `正在更新 ${agent.name}…`);
+          try {
+            const result = await api(`/api/agents/${agent.key}/update`, { method: 'POST' });
+            show($('#agentsOut'), `${result.ok ? '更新完成' : '更新失败'}\n\n${result.output || ''}`);
+            await loadAgents();
+          } catch (err) {
+            show($('#agentsOut'), err.message);
+          } finally {
+            btn.disabled = false;
+          }
+        };
+        action.appendChild(btn);
+      } else {
+        action.textContent = '随镜像安装';
+        action.className = 'muted';
+      }
+      tr.append(name, installed, latest, action);
+      body.appendChild(tr);
+    }
+  } catch (err) {
+    $('#agentsBody').innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'bad';
+    td.textContent = err.message;
+    tr.appendChild(td);
+    $('#agentsBody').appendChild(tr);
+  }
+}
+
+let models = { profiles: [], assignments: {} };
+
+function field(labelText, type, value, dataName, options) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  wrap.appendChild(label);
+
+  let input;
+  if (type === 'select') {
+    input = document.createElement('select');
+    for (const option of options) {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      input.appendChild(opt);
+    }
+    input.value = value || options[0]?.value || '';
+  } else {
+    input = document.createElement('input');
+    input.type = type;
+    input.value = value || '';
+  }
+  input.dataset.f = dataName;
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function renderProfiles() {
+  const root = $('#profiles');
+  root.textContent = '';
+
+  if (!models.profiles.length) {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = '还没有配置。点击“新增模型配置”开始。';
+    root.appendChild(p);
+  }
+
+  models.profiles.forEach((profile, index) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'profile';
+    wrap.dataset.id = profile.id;
+
+    const head = document.createElement('div');
+    head.className = 'profile-head';
+    const title = document.createElement('strong');
+    title.textContent = profile.name || `配置 ${index + 1}`;
+    const remove = document.createElement('button');
+    remove.className = 'danger';
+    remove.textContent = '删除';
+    remove.onclick = () => {
+      models.profiles.splice(index, 1);
+      renderProfiles();
+      renderAssignments();
+    };
+    head.append(title, remove);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid3';
+    grid.append(
+      field('配置 ID', 'text', profile.id, 'id'),
+      field('显示名称', 'text', profile.name, 'name'),
+      field('协议', 'select', profile.protocol, 'protocol', [
+        { value: 'openai', label: 'OpenAI 兼容' },
+        { value: 'anthropic', label: 'Anthropic 兼容' },
+      ]),
+    );
+
+    const grid2 = document.createElement('div');
+    grid2.className = 'grid3';
+    grid2.style.marginTop = '10px';
+    grid2.append(
+      field('baseUrl（通常以 /v1 结尾）', 'text', profile.baseUrl, 'baseUrl'),
+      field('API Key', 'password', '', 'apiKey'),
+      field('OpenAI 协议', 'select', profile.openaiApi, 'openaiApi', [
+        { value: 'responses', label: 'Responses（Codex 必需）' },
+        { value: 'chat', label: 'Chat Completions' },
+      ]),
+    );
+
+    const keyInput = grid2.querySelector('[data-f="apiKey"]');
+    keyInput.placeholder = profile.hasApiKey ? '已保存，留空保持不变' : '未设置';
+
+    const grid3 = document.createElement('div');
+    grid3.className = 'grid2';
+    grid3.style.marginTop = '10px';
+    grid3.append(
+      field('默认模型 ID', 'text', profile.defaultModel, 'defaultModel'),
+      field('快速模型 ID（可选）', 'text', profile.fastModel, 'fastModel'),
+    );
+
+    wrap.append(head, grid, grid2, grid3);
+    root.appendChild(wrap);
+  });
+}
+
+const AGENT_LABELS = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  pi: 'Pi',
+};
+
+function renderAssignments() {
+  const root = $('#assignments');
+  root.textContent = '';
+  for (const key of Object.keys(AGENT_LABELS)) {
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const label = document.createElement('label');
+    label.textContent = AGENT_LABELS[key];
+    const select = document.createElement('select');
+    select.dataset.assign = key;
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '不配置';
+    select.appendChild(none);
+    for (const profile of models.profiles) {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.name || profile.id;
+      select.appendChild(option);
+    }
+    select.value = models.assignments?.[key] || '';
+    wrap.append(label, select);
+    root.appendChild(wrap);
+  }
+}
+
+async function loadModels() {
+  try {
+    models = await api('/api/models');
+    renderProfiles();
+    renderAssignments();
+  } catch (err) {
+    show($('#modelsOut'), err.message);
+  }
+}
+
+function collectProfiles() {
+  return [...document.querySelectorAll('#profiles .profile')].map((el) => {
+    const value = (name) => el.querySelector(`[data-f="${name}"]`).value;
+    return {
+      id: value('id').trim(),
+      name: value('name').trim(),
+      protocol: value('protocol'),
+      baseUrl: value('baseUrl').trim(),
+      apiKey: value('apiKey').trim(),
+      defaultModel: value('defaultModel').trim(),
+      fastModel: value('fastModel').trim(),
+      openaiApi: value('openaiApi'),
+    };
+  });
+}
+
+function collectAssignments() {
+  const result = {};
+  for (const select of document.querySelectorAll('[data-assign]')) {
+    result[select.dataset.assign] = select.value || null;
+  }
+  return result;
+}
+
+$('#addProfile').onclick = () => {
+  models.profiles.push({
+    id: `profile-${models.profiles.length + 1}`,
+    name: `配置 ${models.profiles.length + 1}`,
+    protocol: 'openai',
+    baseUrl: '',
+    hasApiKey: false,
+    defaultModel: '',
+    fastModel: '',
+    openaiApi: 'responses',
+  });
+  renderProfiles();
+  renderAssignments();
+};
+
+$('#saveModels').onclick = async () => {
+  const button = $('#saveModels');
+  button.disabled = true;
+  show($('#modelsOut'), '正在写入配置…');
+  try {
+    const result = await api('/api/models', {
+      method: 'PUT',
+      body: JSON.stringify({ profiles: collectProfiles(), assignments: collectAssignments() }),
+    });
+    models = result.models;
+    renderProfiles();
+    renderAssignments();
+    const lines = [];
+    lines.push(result.written.length ? `已写入：\n${result.written.map((f) => `  ${f}`).join('\n')}` : '没有写入任何文件');
+    if (result.warnings.length) lines.push(`\n警告：\n${result.warnings.map((w) => `  - ${w}`).join('\n')}`);
+    if (result.restarted) lines.push('\n已重启 T3 使 Codex 环境变量生效。');
+    show($('#modelsOut'), lines.join('\n'));
+    await loadStatus();
+  } catch (err) {
+    show($('#modelsOut'), `保存失败：${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+let browserState = null;
+
+function browserSummary(state) {
+  const probe = state.probe || {};
+  const mcp = state.mcp || {};
+  const t3 = state.t3Browser || {};
+  const names = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' };
+  const configured = Object.entries(state.agents || {})
+    .filter(([, value]) => value)
+    .map(([key]) => names[key] || key);
+
+  const lines = [];
+  lines.push(`CDP：${probe.ok ? `已连接${probe.browser ? ` · ${probe.browser}` : ''}` : `未连接${probe.error ? ` · ${probe.error}` : ''}`}`);
+  lines.push(`MCP：${mcp.installed ? `已安装${mcp.version ? ` v${mcp.version}` : ''}` : '未安装'}${mcp.path ? ` · ${mcp.path}` : ''}`);
+  lines.push(`已写入：${configured.length ? configured.join(' / ') : '无'}`);
+  lines.push(`T3 内置浏览器：${t3.sandboxDisabled ? 'sandbox 已关闭' : 'sandbox 未关闭'} · ${t3.fonts ? '字体正常' : '缺少字体'} · ${t3.chromeInstalled ? 'Chrome 已下载' : 'Chrome 尚未下载'}`);
+  return lines.join('\n');
+}
+
+async function loadBrowser() {
+  try {
+    browserState = await api('/api/browser');
+    $('#cdpUrl').value = browserState.cdpUrl || '';
+    $('#cdpEnabled').checked = Boolean(browserState.enabled);
+    $('#cdpInfo').textContent = browserSummary(browserState);
+  } catch (err) {
+    $('#cdpInfo').textContent = err.message;
+  }
+}
+
+$('#cdpTest').onclick = async () => {
+  const button = $('#cdpTest');
+  button.disabled = true;
+  show($('#cdpOut'), '正在连接 CDP…');
+  try {
+    const result = await api('/api/browser/test', {
+      method: 'POST',
+      body: JSON.stringify({ cdpUrl: $('#cdpUrl').value }),
+    });
+    show(
+      $('#cdpOut'),
+      result.ok
+        ? `连接成功：${result.browser || '(unknown)'}\n${result.webSocketDebuggerUrl || ''}`
+        : `连接失败：${result.error || 'unknown'}\n${result.url || ''}`,
+    );
+  } catch (err) {
+    show($('#cdpOut'), `连接失败：${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#cdpSave').onclick = async () => {
+  const button = $('#cdpSave');
+  button.disabled = true;
+  show($('#cdpOut'), '正在保存并应用…');
+  try {
+    if ($('#cdpEnabled').checked) {
+      const current = browserState || (await api('/api/browser'));
+      if (!current.mcp?.installed) {
+        show($('#cdpOut'), 'chrome-devtools-mcp 未安装，正在安装…');
+        const installed = await api('/api/browser/install', { method: 'POST' });
+        if (!installed.ok || !installed.mcp?.installed) {
+          throw new Error(`MCP 安装失败：${installed.output || installed.error || '未知错误'}`);
+        }
+      }
+    }
+
+    const result = await api('/api/browser', {
+      method: 'PUT',
+      body: JSON.stringify({
+        cdpUrl: $('#cdpUrl').value,
+        enabled: $('#cdpEnabled').checked,
+      }),
+    });
+
+    const lines = [];
+    lines.push(result.written.length
+      ? `已写入：\n${result.written.map((file) => `  ${file}`).join('\n')}`
+      : '没有写入文件');
+    if (result.removed.length) {
+      lines.push(`已清理：\n${result.removed.map((file) => `  ${file}`).join('\n')}`);
+    }
+    if (result.warnings.length) {
+      lines.push(`警告：\n${result.warnings.map((warning) => `  - ${warning}`).join('\n')}`);
+    }
+    const probe = result.browser?.probe;
+    if (result.enabled && probe && !probe.ok) {
+      lines.push(`注意：CDP 当前未连接（${probe.error || 'unknown'}），配置已写入，浏览器启动后即可使用。`);
+    }
+    lines.push('新会话生效；如果 T3 里已有会话看不到工具，请开新会话或重启 T3。');
+    show($('#cdpOut'), lines.join('\n\n'));
+    await loadBrowser();
+  } catch (err) {
+    show($('#cdpOut'), `保存失败：${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#cdpInstall').onclick = async () => {
+  const button = $('#cdpInstall');
+  button.disabled = true;
+  show($('#cdpOut'), '正在安装/更新 chrome-devtools-mcp…');
+  try {
+    const result = await api('/api/browser/install', { method: 'POST' });
+    const version = result.mcp?.version ? `\n\n版本：${result.mcp.version}` : '';
+    show($('#cdpOut'), `${result.ok ? '安装完成' : '安装失败'}\n\n${result.output || result.error || ''}${version}`);
+    await loadBrowser();
+  } catch (err) {
+    show($('#cdpOut'), `安装失败：${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+async function loadMultica() {
+  try {
+    const m = await api('/api/multica');
+    $('#mServer').value = m.serverUrl || '';
+    $('#mApp').value = m.appUrl || '';
+    $('#mToken').value = '';
+    $('#mToken').placeholder = m.hasToken ? '已保存，留空保持不变' : 'mul_...';
+    $('#mAuto').checked = m.autoStart;
+    $('#mInfo').textContent = `状态：${m.proc.state}${m.proc.pid ? ` · pid ${m.proc.pid}` : ''}${m.version ? ` · ${m.version}` : ''}`;
+  } catch (err) {
+    $('#mInfo').textContent = err.message;
+  }
+}
+
+function formatSteps(steps) {
+  return (steps || []).map((step) => {
+    const code = step.code === 0 ? 'OK' : `exit ${step.code}`;
+    const body = [step.stdout, step.stderr, step.error].filter(Boolean).join('\n').trim();
+    return `[${step.step}] ${code}${body ? `\n${body}` : ''}`;
+  }).join('\n\n');
+}
+
+$('#mSave').onclick = async () => {
+  const button = $('#mSave');
+  button.disabled = true;
+  show($('#mOut'), '正在保存并应用…');
+  try {
+    const result = await api('/api/multica', {
+      method: 'PUT',
+      body: JSON.stringify({
+        serverUrl: $('#mServer').value,
+        appUrl: $('#mApp').value,
+        token: $('#mToken').value,
+        autoStart: $('#mAuto').checked,
+      }),
+    });
+    $('#mToken').value = '';
+    show($('#mOut'), formatSteps(result.steps) || '已保存');
+    await loadMultica();
+    await loadStatus();
+  } catch (err) {
+    show($('#mOut'), `保存失败：${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+async function multicaAction(path, label) {
+  show($('#mOut'), `${label}…`);
+  try {
+    const result = await api(path, { method: 'POST' });
+    show($('#mOut'), formatSteps(result.steps) || JSON.stringify(result, null, 2));
+    await loadMultica();
+    await loadStatus();
+  } catch (err) {
+    show($('#mOut'), `${label}失败：${err.message}`);
+  }
+}
+
+$('#mLogin').onclick = () => multicaAction('/api/multica/login', '重新登录');
+$('#mStart').onclick = () => multicaAction('/api/multica/start', '启动 daemon');
+$('#mStop').onclick = () => multicaAction('/api/multica/stop', '停止 daemon');
+$('#mRestart').onclick = () => multicaAction('/api/multica/restart', '重启 daemon');
+$('#mInstall').onclick = () => multicaAction('/api/multica/install', '安装/升级 Multica CLI');
+
+$('#pairBtn').onclick = async () => {
+  const button = $('#pairBtn');
+  button.disabled = true;
+  $('#pairHint').textContent = '正在生成…';
+  $('#pairLink').classList.add('hidden');
+  $('#pairRaw').classList.add('hidden');
+  $('#qr').classList.add('hidden');
+  try {
+    const result = await api('/api/t3/pair', { method: 'POST' });
+    if (result.qrSvg) {
+      const doc = new DOMParser().parseFromString(result.qrSvg, 'image/svg+xml');
+      $('#qr').replaceChildren(document.importNode(doc.documentElement, true));
+      $('#qr').classList.remove('hidden');
+    }
+    if (result.url) {
+      const link = $('#pairLink');
+      link.href = result.url;
+      link.textContent = result.url;
+      link.classList.remove('hidden');
+      $('#pairHint').textContent = result.appLink ? '扫码或打开链接；桌面端也可用 t3code:// 深链。' : '扫码或打开链接。';
+    } else {
+      $('#pairHint').textContent = result.error || '未获取到配对链接。';
+    }
+    if (result.output) show($('#pairRaw'), result.output);
+  } catch (err) {
+    $('#pairHint').textContent = `获取失败：${err.message}`;
+    $('#pairRaw').classList.remove('hidden');
+    $('#pairRaw').textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#t3RestartBtn').onclick = async () => {
+  const button = $('#t3RestartBtn');
+  button.disabled = true;
+  try {
+    await api('/api/t3/restart', { method: 'POST' });
+    await loadStatus();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#agentsRefresh').onclick = () => loadAgents();
+
+let logSource = 't3';
+$('#logSource').onchange = () => {
+  logSource = $('#logSource').value;
+  loadLogs();
+};
+
+async function loadLogs() {
+  if ($('#logPause').checked || document.hidden) return;
+  const pre = $('#logPre');
+  try {
+    const result = await api(`/api/logs/${logSource}?lines=400`);
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+    pre.textContent = result.lines
+      .map((entry) => `[${new Date(entry.t).toLocaleTimeString()}] ${entry.line}`)
+      .join('\n') || '(暂无日志)';
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  } catch (err) {
+    pre.textContent = err.message;
+  }
+}
+
+$('#logRefresh').onclick = () => loadLogs();
+
+loadStatus();
+loadAgents();
+loadModels();
+loadBrowser();
+loadMultica();
+
+setInterval(loadStatus, 5000);
+setInterval(loadLogs, 2500);
+</script>
+</body>
+</html>
