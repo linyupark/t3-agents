@@ -63,7 +63,9 @@ services:
 
       # 全局共享 skills：Codex / OpenCode / Pi 原生读取 ~/.agents/skills
       - ${WORKSPACE_DIR:-./workspace}/.agents:/root/.agents
-      # Claude Code 只读 ~/.claude/skills，单独挂同一份目录
+      # Claude Code 只读 ~/.claude/skills，单独挂同一份目录。
+      # 注意：这个子挂载会遮住 CONFIG_DIR/claude/skills；技能统一放
+      # WORKSPACE_DIR/.agents/skills，不要放进 config/claude/skills（容器里不可见）。
       - ${WORKSPACE_DIR:-./workspace}/.agents/skills:/root/.claude/skills
 
       # 全局 npm 包持久化：docker compose down/up 后不再重装

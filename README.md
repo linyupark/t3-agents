@@ -172,7 +172,9 @@ ${WORKSPACE_DIR:-./workspace}/.agents/skills/<skill-name>/SKILL.md
 
 - Codex、OpenCode、Pi 原生读取 `~/.agents/skills`，compose 已把 `WORKSPACE_DIR/.agents` 挂到 `/root/.agents`；
 - Claude Code 只读 `~/.claude/skills`，compose 把同一个 `skills` 目录单独挂了进去；
-- 新增技能后重启对应 agent 会话即可生效（Pi 可在会话里 `/reload`）。
+- **不要往 `CONFIG_DIR/claude/skills` 放技能**：`/root/.claude/skills` 的嵌套挂载会把 `config/claude/skills` 完全遮住，容器里根本看不到它。请统一放在上面的共享目录；
+- 如果技能已经在 `CONFIG_DIR/claude/skills` 里，可以在宿主机重跑一次 `./init.sh`（会把原生目录里的技能用 `cp -a -n` 复制到共享目录，不覆盖同名文件），或者手动 `cp -a config/claude/skills/. workspace/.agents/skills/`；
+- 新增技能后要新开 agent 会话（Claude / Codex）或重启对应进程才会加载；Pi 可在会话里 `/reload`。
 
 技能使用通用的 Agent Skills 格式：
 
@@ -187,7 +189,7 @@ description: Extract text and tables from PDF files. Use when reading, convertin
 
 同名技能不会合并：OpenCode 按优先级覆盖，Pi 保留先发现的，建议目录名和 frontmatter 的 `name` 保持一致。如果 `WORKSPACE_DIR` 本身是 git 仓库，建议把 `.agents/`、`.tmp/` 加进它的 `.gitignore`。
 
-`init.sh` 会把 `CONFIG_DIR/claude/skills`、`CONFIG_DIR/opencode/skills`、`CONFIG_DIR/pi/agent/skills` 里已有的技能**复制**到共享目录（不删除原文件）；确认共享目录里的版本可用后，可以自行清掉各原生目录里的旧副本。
+`init.sh` 只在**执行时**把 `CONFIG_DIR/claude/skills`、`CONFIG_DIR/opencode/skills`、`CONFIG_DIR/pi/agent/skills` 里已有的技能**复制**到共享目录（`cp -a -n`，不覆盖同名文件、不删除原文件），运行后再放进这些目录的技能不会自动同步；确认共享目录里的版本可用后，可以自行清掉各原生目录里的旧副本。
 
 ### 7. 浏览器 / CDP
 

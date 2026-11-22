@@ -140,6 +140,13 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 - `init.sh` 的 `env_get` 只解析简单的 `KEY=value`（支持引号和行尾注释），不支持变量嵌套；文档里不要鼓励写 `WORKSPACE_DIR=$HOME/...`。
 - 改路径不会自动迁移数据；换目录前先停容器并手动拷贝旧 `config/`、`workspace/`。改完 `.env` 后重跑一次 `./init.sh`，让新目录和权限先就位，再 `docker compose up -d`。
 
+### 8. Skills（技能）
+
+- 唯一的技能目录是 `WORKSPACE_DIR/.agents/skills/<name>/SKILL.md`（默认 `./workspace/.agents/skills`）；`SKILL.md` 必须有 YAML frontmatter 的 `name` / `description`，目录名建议与 `name` 一致。
+- compose 把这个目录同时挂到 `~/.agents/skills`（Codex / OpenCode / Pi）和 `~/.claude/skills`（Claude）。
+- **`CONFIG_DIR/claude/skills` 会被 `/root/.claude/skills` 的嵌套挂载完全遮住**，容器里看不到；不要往那里放技能。`init.sh` 只在执行时把 `config/claude/skills` 等原生目录复制到共享目录（`cp -a -n`），运行后新增的技能不会自动同步。
+- 技能在 agent 进程/会话启动时加载；新增或修改后要新开会话（Pi 可用 `/reload`）才会生效。
+
 ## 常见改动
 
 ### 新增一个 agent CLI

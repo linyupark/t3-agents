@@ -5,6 +5,17 @@
 
 ## 2026-11-22
 
+### Skills 目录被嵌套挂载遮住（文档修正）
+
+- 现象：把技能放进宿主机 `CONFIG_DIR/claude/skills` 后，Claude 仍识别不到。
+- 原因：compose 把 `${WORKSPACE_DIR}/.agents/skills` 挂到了 `/root/.claude/skills`，
+  这个子挂载会完全遮住 `CONFIG_DIR/claude/skills`；`init.sh` 只在执行时用
+  `cp -a -n` 把原生目录复制到共享目录，运行后新增的技能不会自动同步。
+- 正确位置：`WORKSPACE_DIR/.agents/skills/<name>/SKILL.md`，该目录同时挂给
+  `~/.agents/skills`（Codex/OpenCode/Pi）和 `~/.claude/skills`（Claude）。
+- 已在 compose 注释、`README.md` §6、`AGENTS.md` §8 写明；新增技能后要新开
+  agent 会话才会加载。
+
 ### Claude 额外模型、Pi 思考等级、中文字体
 
 - **Claude Code 在 T3 里只显示主模型**：T3 的 Claude 选择器只从 Claude CLI 探测结果和
