@@ -15,6 +15,20 @@ function fail(message) {
   throw new Error(message);
 }
 
+// 配置里的模型条目：id 是发给网关的真实模型 ID；name 只影响显示；
+// vision 表示该模型接受图片输入（OpenCode / Pi / Codex 会据此写能力标记）。
+// 旧配置只有 defaultModel / fastModel，normalizeModels 会把它们补进列表。
+function normalizeModelEntry(raw, profileId) {
+  const id = String(raw?.id ?? raw ?? '').trim();
+  if (!id) return null;
+  if (!MODEL_RE.test(id)) fail(`配置 ${profileId} 的模型 ID 不合法: ${id}`);
+  return {
+    id,
+    name: String(raw?.name || '').trim(),
+    vision: raw?.vision === true,
+  };
+}
+
 export function normalizeModels(input) {
   const rawProfiles = Array.isArray(input?.profiles) ? input.profiles : [];
   const profiles = [];
@@ -32,6 +46,7 @@ export function normalizeModels(input) {
       fastModel: String(raw?.fastModel || '').trim(),
       contextWindow: Number(raw?.contextWindow) > 0 ? Math.floor(Number(raw.contextWindow)) : 0,
       openaiApi: raw?.openaiApi === 'chat' ? 'chat' : 'responses',
+      models: [],
     };
 
     if (!ID_RE.test(profile.id)) fail(`配置 ID 不合法: ${profile.id || '(空)'}（只允许小写字母、数字、-）`);
@@ -57,6 +72,23 @@ export function normalizeModels(input) {
     }
     if (!MODEL_RE.test(profile.defaultModel)) fail(`配置 ${profile.id} 的默认模型 ID 不合法`);
     if (profile.fastModel && !MODEL_RE.test(profile.fastModel)) fail(`配置 ${profile.id} 的快速模型 ID 不合法`);
+
+    // 默认模型和快速模型始终写进列表；额外模型按顺序追加，重复 ID 合并。
+    const addModel = (entry) => {
+      if (!entry) return;
+      const existing = profile.models.find((model) => model.id === entry.id);
+      if (!existing) {
+        profile.models.push(entry);
+        return;
+      }
+      existing.vision = existing.vision || entry.vision;
+      existing.name = existing.name || entry.name;
+    };
+    addModel(normalizeModelEntry({ id: profile.defaultModel }, profile.id));
+    addModel(normalizeModelEntry({ id: profile.fastModel }, profile.id));
+    for (const rawModel of Array.isArray(raw?.models) ? raw.models : []) {
+      addModel(normalizeModelEntry(rawModel, profile.id));
+    }
 
     profiles.push(profile);
   }
@@ -102,12 +134,23 @@ export function anthropicBaseUrl(baseUrl) {
   return resolveAnthropicBase({ baseUrl });
 }
 
-// OpenCode / Pi 把模型暴露给 T3 的模型列表；默认模型和快速模型都要写进去，
-// 否则 T3 只能看到主模型。
-function uniqueModelIds(profile) {
-  return [profile.defaultModel, profile.fastModel]
-    .filter(Boolean)
-    .filter((id, index, all) => all.indexOf(id) === index);
+// OpenCode / Pi / Codex 把模型暴露给 T3 的模型列表；默认、快速和额外模型
+// 都要写进去，否则 T3 只能看到主模型。
+function modelEntries(profile) {
+  const source = Array.isArray(profile?.models) && profile.models.length
+    ? profile.models
+    : [profile?.defaultModel, profile?.fastModel].filter(Boolean).map((id) => ({ id }));
+  const list = [];
+  for (const entry of source) {
+    const id = String(entry?.id || '').trim();
+    if (!id || list.some((item) => item.id === id)) continue;
+    list.push({
+      id,
+      name: String(entry?.name || '').trim(),
+      vision: entry?.vision === true,
+    });
+  }
+  return list;
 }
 
 function usesAgentHubModel(value) {
@@ -142,27 +185,29 @@ function codexCatalogTemplate() {
 function codexCatalog(profile) {
   const template = codexCatalogTemplate();
   if (!template) return null;
-  const contextWindow = profile.contextWindow || 200000;
   return {
-    models: uniqueModelIds(profile).map((id, index) => ({
-      ...template,
-      slug: id,
-      display_name: id,
-      description: `Agent Hub: ${profile.name}`,
-      context_window: contextWindow,
-      max_context_window: contextWindow,
-      input_modalities: ['text'],
-      supports_image_detail_original: false,
-      visibility: 'list',
-      supported_in_api: true,
-      priority: index + 1,
-      service_tiers: [],
-      additional_speed_tiers: [],
-      default_service_tier: null,
-      upgrade: null,
-      availability_nux: null,
-      model_specialty: null,
-    })),
+    models: modelEntries(profile).map((model, index) => {
+      const contextWindow = profile.contextWindow || 200000;
+      return {
+        ...template,
+        slug: model.id,
+        display_name: model.name || model.id,
+        description: `Agent Hub: ${profile.name}`,
+        context_window: contextWindow,
+        max_context_window: contextWindow,
+        input_modalities: model.vision ? ['text', 'image'] : ['text'],
+        supports_image_detail_original: model.vision,
+        visibility: 'list',
+        supported_in_api: true,
+        priority: index + 1,
+        service_tiers: [],
+        additional_speed_tiers: [],
+        default_service_tier: null,
+        upgrade: null,
+        availability_nux: null,
+        model_specialty: null,
+      };
+    }),
   };
 }
 
@@ -318,7 +363,7 @@ export function applyModelConfig(models) {
           ? '@opencode/ai/providers/openai-compatible'
           : '@opencode/ai/providers/openai-compatible/responses';
 
-      const modelIds = uniqueModelIds(profile);
+      const entries = modelEntries(profile);
       doc.providers.agenthub = {
         name: profile.name,
         package: pkg,
@@ -326,7 +371,14 @@ export function applyModelConfig(models) {
           baseURL: profile.protocol === 'anthropic' ? resolveAnthropicBase(profile) : profile.baseUrl,
           ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
         },
-        models: Object.fromEntries(modelIds.map((id) => [id, { name: id }])),
+        models: Object.fromEntries(entries.map((model) => [
+          model.id,
+          {
+            name: model.name || model.id,
+            // OpenCode 用 capabilities.input 判断模型能否接收图片；不写则按纯文本处理。
+            ...(model.vision ? { capabilities: { input: ['text', 'image'] } } : {}),
+          },
+        ])),
       };
       doc.model = `agenthub/${profile.defaultModel}`;
       if (profile.fastModel && profile.fastModel !== profile.defaultModel) {
@@ -370,7 +422,12 @@ export function applyModelConfig(models) {
             ? 'openai-completions'
             : 'openai-responses',
         ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
-        models: uniqueModelIds(profile).map((id) => ({ id, name: id })),
+        models: modelEntries(profile).map((model) => ({
+          id: model.id,
+          name: model.name || model.id,
+          // Pi 的自定义模型默认按纯文本处理；显式写 image 才会把图片传给模型。
+          ...(model.vision ? { input: ['text', 'image'] } : {}),
+        })),
       };
       writeJson(modelsFile, modelsDoc, 0o600);
       settingsDoc.$schema = settingsDoc.$schema || 'https://pi.dev/schemas/settings.schema.json';

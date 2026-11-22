@@ -12,7 +12,7 @@ import {
   normalizeBrowserSettings,
   probeCdp,
 } from './lib/browser.js';
-import { AnthropicProxy } from './lib/anthropic-proxy.js';
+import { ANTHROPIC_PROXY_PATH, AnthropicProxy } from './lib/anthropic-proxy.js';
 import { applyModelConfig, normalizeModels, redactModels } from './lib/models.js';
 import * as multica from './lib/multica.js';
 import { ManagedProcess } from './lib/procs.js';
@@ -91,11 +91,9 @@ async function multicaAvailable() {
 }
 
 // Claude Code 会在 system 里带一个 `x-anthropic-billing-header:` 块，部分第三方
-// 网关（例如 llms.zj-qq.cn）会因此返回 400。用本机代理去掉这个块再转发。
-const anthropicProxy = process.env.CLAUDE_PROXY === '0'
-  ? null
-  : new AnthropicProxy({ port: Number(process.env.CLAUDE_PROXY_PORT || 3775) });
-if (anthropicProxy) anthropicProxy.start();
+// 网关（例如 llms.zj-qq.cn）会因此返回 400。转发逻辑挂在管理后台自己的端口上，
+// 不再单独监听端口。
+const anthropicProxy = process.env.CLAUDE_PROXY === '0' ? null : new AnthropicProxy();
 
 function applyModels() {
   const result = applyModelConfig(settings.models);
@@ -118,6 +116,9 @@ function modelsSignature(models) {
       profile.anthropicBaseUrl || '',
       profile.defaultModel,
       profile.fastModel,
+      (profile.models || [])
+        .map((model) => `${model.id}:${model.vision ? 1 : 0}:${model.name || ''}`)
+        .join(','),
       profile.contextWindow || 0,
       profile.openaiApi,
       profile.apiKey || '',
@@ -161,7 +162,12 @@ applyBrowserConfig(settings.browser)
 const app = new Hono();
 
 app.use('*', async (c, next) => {
+  // 健康检查和 Anthropic 转发不走 Basic Auth：Claude Code 只会带自己的
+  // ANTHROPIC_AUTH_TOKEN，转发处理器会单独校验它是否等于配置里的 key。
   if (c.req.path === '/healthz') return next();
+  if (c.req.path === ANTHROPIC_PROXY_PATH || c.req.path.startsWith(`${ANTHROPIC_PROXY_PATH}/`)) {
+    return next();
+  }
 
   const header = c.req.header('authorization') || '';
   const [scheme, encoded] = header.split(' ');
@@ -196,6 +202,13 @@ app.use('/api/*', async (c, next) => {
 const indexHtml = fs.readFileSync(path.join(APP_DIR, 'public', 'index.html'), 'utf8');
 
 app.get('/healthz', (c) => c.text('ok'));
+
+// Claude Code 的 ANTHROPIC_BASE_URL 指向这里（同端口 + 路径前缀）。
+if (anthropicProxy) {
+  app.all(ANTHROPIC_PROXY_PATH, (c) => anthropicProxy.handle(c));
+  app.all(`${ANTHROPIC_PROXY_PATH}/*`, (c) => anthropicProxy.handle(c));
+}
+
 app.get('/', (c) => c.html(indexHtml));
 
 app.get('/api/status', (c) =>
@@ -569,7 +582,6 @@ if (process.env.AUTOSTART_MULTICA !== '0' && settings.multica?.serverUrl) {
 const shutdown = async (signal) => {
   adminLog(`received ${signal}, stopping children`);
   await Promise.allSettled([t3.stop(), multicaProc.stop()]);
-  anthropicProxy?.stop();
   process.exit(0);
 };
 
