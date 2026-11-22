@@ -23,8 +23,16 @@ mkdir -p \
 chmod 1777 workspace/.tmp workspace/.tmp/var-tmp
 chmod 755 workspace/.agents workspace/.agents/skills
 
-# Compose 会把不存在的 bind mount 源创建成目录，gitconfig 必须是文件
-[ -f config/git/gitconfig ] || : > config/git/gitconfig
+# Compose 会把不存在的 bind mount 源创建成目录，gitconfig 必须是文件。
+# 老部署可能已经被建成了目录，这里尝试把它恢复成文件；需要重启容器才会重新挂载。
+if [ -d config/git/gitconfig ]; then
+  if rmdir config/git/gitconfig 2>/dev/null; then
+    echo "[!] config/git/gitconfig 曾是空目录（Docker 自动创建），已重建为文件；请重启容器让挂载生效"
+  else
+    echo "[x] config/git/gitconfig 是非空目录，请手动备份并删除后再运行" >&2
+  fi
+fi
+[ -d config/git/gitconfig ] || { [ -f config/git/gitconfig ] || : > config/git/gitconfig; }
 
 # Claude Code 2.x 使用 CLAUDE_CONFIG_DIR，全局状态落在 config/claude/.claude.json。
 # 旧布局是 config/claude.json（文件级 bind mount），这里做一次性迁移。

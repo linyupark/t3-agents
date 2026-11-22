@@ -31,7 +31,7 @@ npm ls -g "claude-code"   # 永远查不到，于是每次都重装
 
 - 所有 npm 全局包装进 `/opt/agents`，compose 用命名卷 `agent_npm` 持久化；
 - 已移除 Antigravity（`agy`）；`/root/.local` 保留为命名卷 `agent_local`，供 pipx/uv 等 user-level 工具使用；
-- Claude Code 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，全局状态文件落在 `config/claude/.claude.json`。旧布局的 `config/claude.json` 会在 `init.sh` 里自动迁移；这样也避免了文件级 bind mount 与 Claude 的原子写入冲突。**已有部署升级后请先重跑一次 `./init.sh` 再重建**；
+- Claude Code 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，全局状态文件落在 `config/claude/.claude.json`。旧布局的 `config/claude.json` 会在 `init.sh` 里自动迁移；这样也避免了文件级 bind mount 与 Claude 的原子写入冲突。**已有部署升级后请先重跑一次 `./init.sh` 再重建**；如果 `config/git/gitconfig` 曾被 Docker 建成了空目录，`init.sh` 也会自动恢复成文件，修复后需要重启容器让挂载生效；
 - 删除了启动时的自动更新循环。升级在管理后台点按钮，写入的是持久卷。
 
 首次 `docker compose up --build` 会从镜像初始化这两个卷；之后 `down` / `up` 不会重装。
