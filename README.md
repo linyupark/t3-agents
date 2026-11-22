@@ -18,7 +18,7 @@ docker compose up -d --build
 
 ## 配置（.env）
 
-`./init.sh` 会在 `.env` 不存在时从 `.env.example` 复制一份。Compose 用 `.env` 做 `${VAR}` 插值，所以改完要执行 `docker compose up -d` 重建容器；`docker compose restart` 不会应用新的挂载和端口。改过 `WORKSPACE_DIR` / `CONFIG_DIR` 后还要重跑一次 `./init.sh`，让新目录和权限先就位，避免 Docker 以 root 自动创建；只改端口不用重跑。
+`./init.sh` 会在 `.env` 不存在时从 `.env.example` 复制一份。Compose 用 `.env` 做 `${VAR}` 插值，所以改完要执行 `docker compose up -d` 重建容器；`docker compose restart` 不会应用新的挂载和端口。改了 `Dockerfile`、`entrypoint.sh` 或 `admin/` 代码则要带 `--build` 重新构建镜像。改过 `WORKSPACE_DIR` / `CONFIG_DIR` 后还要重跑一次 `./init.sh`，让新目录和权限先就位，避免 Docker 以 root 自动创建；只改端口不用重跑。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -50,7 +50,9 @@ docker compose up -d --build
 
 命名卷故意保留原名：Docker 只在卷首次创建时从镜像初始化，改名会让容器挂到一个全新的空卷，已安装的 agent 和工具需要重装。
 
-## 这次改了什么
+## 历史改动（完整记录见 [CHANGELOG.md](CHANGELOG.md)）
+
+本节记录早期升级要点；之后的模型、技能、字体等改动都在 `CHANGELOG.md`。
 
 ### 1. 容器重建不再重装 agent
 
@@ -65,7 +67,7 @@ npm ls -g "claude-code"   # 永远查不到，于是每次都重装
 
 现在：
 
-- 所有 npm 全局包装进 `/opt/agents`，compose 用命名卷 `agent_npm` 持久化；
+- 所有 agent CLI 包装进 `/opt/agents`，compose 用命名卷 `agent_npm` 持久化；`chrome-devtools-mcp` 仍装在镜像的 `/usr/local`（见 §7）；
 - 已移除 Antigravity（`agy`）；`/root/.local` 保留为命名卷 `agent_local`，供 pipx/uv 等 user-level 工具使用；
 - Claude Code 设置 `CLAUDE_CONFIG_DIR=/root/.claude`，全局状态文件落在 `CONFIG_DIR/claude/.claude.json`（默认 `config/claude/.claude.json`）。旧布局的 `config/claude.json` 会在 `init.sh` 里自动迁移；这样也避免了文件级 bind mount 与 Claude 的原子写入冲突。**已有部署升级后请先重跑一次 `./init.sh` 再重建**；
 - Git 全局配置改为挂载目录 `${CONFIG_DIR:-./config}/git:/root/.config/git`（默认 `./config/git`），`GIT_CONFIG_GLOBAL` 指向其中的 `gitconfig`，不再直接挂载单个文件，Docker 不会再把源建成目录；镜像里的 `/etc/gitconfig` 设置了 `safe.directory = *`，避免 workspace 宿主 uid 与容器 root 不一致导致 git 拒绝操作。老部署如果默认的 `config/git/gitconfig` 已被建成空目录，`init.sh` 会尝试恢复，修复后需要重启容器；
@@ -92,14 +94,14 @@ environment:
 
 功能：
 
-- **T3 配对码**：按钮执行 `t3 pair`，解析配对链接并生成二维码；如果 T3 刚重启导致命令失败，会自动回退到 `t3.log` 里最后一次 `Pairing URL:`；
+- **T3 配对码**：按钮执行 `t3 pair`，解析配对链接并生成二维码；如果 T3 刚重启导致命令失败，会自动回退到 `t3.log` 里最后一次 `Pairing URL:`；另有“重启 T3”按钮；
 - **Agent 版本**：列出已安装/最新版本，逐个更新；
 - **浏览器 / CDP**：给所有 agent 统一配置外部 Chrome CDP，测试连接，安装/更新 `chrome-devtools-mcp`；
-- **第三方模型**：一份配置分配给多个 agent，自动生成各自配置文件；
+- **第三方模型**：一份配置分配给多个 agent，支持任意多个模型，以及每个模型的“视觉 / 推理”能力标记；自动生成各自配置文件；
 - **Multica**：保存 server_url/app_url/token，登录、启停 daemon、看日志；
 - **日志**：T3 / Multica / 管理后台三个来源。
 
-后台和 T3 在同一个容器里：`entrypoint.sh` 只做目录准备，然后交给 `node server.js` 作为 supervisor，由它拉起 `t3 serve` 和 `multica daemon start --foreground`。
+后台和 T3 在同一个容器里：`entrypoint.sh` 先准备目录、合并 Claude 的技能视图，然后把进程交给 `node server.js` 作为 supervisor，由它拉起 `t3 serve` 和 `multica daemon start --foreground`。
 
 ### 4. 第三方模型配置
 
@@ -107,7 +109,7 @@ environment:
 
 | Agent | 文件 | 说明 |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `ANTHROPIC_BASE_URL`（指向本机代理）/ `ANTHROPIC_AUTH_TOKEN` / 模型 |
+| Claude Code | `~/.claude/settings.json` + `~/.t3/userdata/settings.json` | `ANTHROPIC_BASE_URL`（指向本机代理）/ `ANTHROPIC_AUTH_TOKEN` / 模型；额外模型写 T3 的 `providerInstances.claudeAgent.config.customModels` |
 | Codex | `~/.codex/config.toml` + `~/.codex/agenthub-models.json` | 自定义 provider，`wire_api = "responses"`，`model_catalog_json` 提供选择器里的自定义模型 |
 | OpenCode | `~/.config/opencode/opencode.json` | `providers.agenthub` + `model` / `small_model` |
 | Pi | `~/.pi/agent/models.json` + `settings.json` | `agenthub` provider + 默认模型 |
@@ -116,12 +118,12 @@ environment:
 
 - **Claude Code 只能接 Anthropic 兼容端点**；它的 SDK 会自己在 baseUrl 后追加 `/v1/messages`，所以 `ANTHROPIC_BASE_URL` 不要再带末尾的 `/v1`（后台会自动去掉并打警告）；
 - 协议可以选 **“同一配置同时支持两者”**：同一个配置里 OpenAI 用 `baseUrl`，Claude 用 `anthropicBaseUrl`（留空则自动去掉 `baseUrl` 末尾的 `/v1`），不需要为同一个网关建两份配置；
-- Claude Code 的请求里有一个第三方网关可能拒绝的 `x-anthropic-billing-header:` 块（`llms.zj-qq.cn` 会返回 400 `Illegal API invocation from an unapproved channel`）。后端在管理后台同一个端口上挂了 `/anthropic-proxy` 转发路径（`ANTHROPIC_BASE_URL` 形如 `http://127.0.0.1:3774/anthropic-proxy`），去掉该块后再发给上游；不需要额外端口，`CLAUDE_PROXY=0` 可关闭；
+- Claude Code 的请求里有一个第三方网关可能拒绝的 `x-anthropic-billing-header:` 块（`llms.zj-qq.cn` 会返回 400 `Illegal API invocation from an unapproved channel`）。后端在管理后台同一个端口上挂了 `/anthropic-proxy` 转发路径（`ANTHROPIC_BASE_URL` 形如 `http://127.0.0.1:${ADMIN_PORT}/anthropic-proxy`，默认 3774），去掉该块后再发给上游；不需要额外端口，`CLAUDE_PROXY=0` 可关闭；
 - 自定义模型 ID 不在 Claude Code 内置清单里时，用配置里的“上下文窗口”写入 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`，避免 Claude 按 1M 猜测；
 - **Codex 目前只支持 OpenAI Responses**（`wire_api = "responses"`），Chat Completions-only 的网关无法给 Codex 用；
 - Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入，所以新增、换 key 或**取消** Codex 分配时，后台都会重启 T3（以及正在运行的 Multica daemon），避免残留旧 key；
 - 给 Claude/Codex 分配了协议不兼容的配置时，会打警告并清掉后台之前写入的配置，不会继续沿用旧端点；
-- **默认模型、快速模型和“更多模型”都会写入 OpenCode / Pi / Codex 的模型列表**：OpenCode 用 `providers.agenthub.models` + `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现；
+- **默认模型、快速模型和“更多模型”都会写入各 agent 的模型列表**：OpenCode 用 `providers.agenthub.models` + `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`，Claude 用 T3 设置（见下条）。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现；
 - 每个模型可以勾选 **“视觉”**：OpenCode 写 `capabilities.input = ["text","image"]`，Pi 写 `input = ["text","image"]`，Codex 写 `input_modalities = ["text","image"]`。不勾选时按纯文本处理；Claude Code 没有对应开关，能否识图取决于模型和网关本身；
 - 每个模型可以勾选 **“推理”**：Pi 写 `reasoning: true`，T3 里才会出现思考等级选择；Claude 的自定义模型会在 T3 设置里生成 `effort` 选项，等级优先取网关 `/v1/models` 的 `reasoning_efforts`。OpenCode 的思考档位由 provider 的 `variants` 决定，这里不写；
 - **Claude 的额外模型写进 T3 自己的设置**：`$T3CODE_HOME/userdata/settings.json` 的 `providerInstances.claudeAgent.config.customModels`（默认 `~/.t3/userdata/settings.json`）。T3 的 Claude 选择器只认这里，`ANTHROPIC_MODEL` 只决定主模型；该字段由后台整体管理；T3 会在下次 provider 状态刷新时读取，保存模型配置时后台也会重启 T3；
@@ -144,9 +146,7 @@ multica daemon start --foreground
 
 工作目录通过 `MULTICA_WORKSPACES_ROOT=/workspace/.multica-workspaces` 放在持久化的 workspace 目录里。`MULTICA_DAEMON_AUTO_UPDATE=0` 避免 daemon 自行升级造成行为漂移。
 
-> 你在对话里贴出的 `mul_...` token 已经泄露，建议在 Multica 里吊销并重新生成一个，只填进管理后台。
-
-### 6. 临时文件、缓存与共享 Skills
+### 6. 临时文件、缓存与 Skills
 
 容易撑大容器可写层的目录都落到了宿主机（下表按默认 `WORKSPACE_DIR=./workspace`、`CONFIG_DIR=./config`；改过变量后前缀相应替换）：
 
@@ -190,7 +190,7 @@ description: Extract text and tables from PDF files. Use when reading, convertin
 具体操作步骤……
 ```
 
-同名技能不会合并：OpenCode 按优先级覆盖，Pi 保留先发现的，建议目录名和 frontmatter 的 `name` 保持一致。如果 `WORKSPACE_DIR` 本身是 git 仓库，建议把 `.agents/`、`.tmp/` 加进它的 `.gitignore`。
+同名技能的处理：Claude 专有优先于共享；OpenCode 按优先级覆盖；Pi 保留先发现的。建议目录名和 frontmatter 的 `name` 保持一致。如果 `WORKSPACE_DIR` 本身是 git 仓库，建议把 `.agents/`、`.tmp/` 加进它的 `.gitignore`。
 
 ### 7. 浏览器 / CDP
 
@@ -233,16 +233,24 @@ T3 自己的预览浏览器：
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example           # 配置模板；init.sh 会复制为 .env
-├── entrypoint.sh          # 目录准备 -> exec node server.js
-├── init.sh                # 宿主机初始化
+├── .dockerignore
+├── .gitignore
+├── README.md
 ├── AGENTS.md              # 接手开发的 agent 必读
 ├── CLAUDE.md              # 指向 AGENTS.md
+├── CHANGELOG.md           # 按时间记录改动和踩坑
+├── entrypoint.sh          # 目录准备 + Claude 技能视图 -> exec node server.js
+├── init.sh                # 宿主机初始化
 ├── admin/
 │   ├── server.js          # Hono 后台 + 进程 supervisor
+│   ├── package.json
+│   ├── package-lock.json
 │   ├── lib/
 │   │   ├── agents.js      # 版本查询 / npm 更新
+│   │   ├── anthropic-proxy.js # Anthropic 转发（去掉 billing header）
 │   │   ├── browser.js     # CDP 探测 / MCP 配置写入
 │   │   ├── models.js      # 各 agent 配置文件生成
+│   │   ├── t3-models.js   # Claude 额外模型写入 T3 设置
 │   │   ├── multica.js     # Multica CLI 封装
 │   │   ├── procs.js       # 子进程 + 环形日志
 │   │   ├── store.js       # 设置持久化 / token
@@ -281,7 +289,7 @@ T3 自己的预览浏览器：
 # 重建镜像
 docker compose up -d --build
 
-# 只重启容器（不会重装 agent）
+# 只重启容器（不重建镜像，不会重装 agent；改了 Dockerfile / entrypoint / admin 代码要用 --build）
 docker compose down && docker compose up -d
 
 # 查看日志（路径按默认 CONFIG_DIR=./config）

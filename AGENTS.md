@@ -44,14 +44,15 @@ T3 Code Agent Hub：在单个 Docker 容器里运行 T3 Code 控制面、多个 
 
 ## 启动链路
 
-1. `entrypoint.sh`：建目录、修复权限、确保 `.claude.json` 和 gitconfig 存在。
+1. `entrypoint.sh`：建目录、修复权限、确保 `.claude.json` 和 gitconfig 存在；把 `/root/.claude-local-skills`（Claude 专有）和 `/root/.agents/skills`（共享）用符号链接合并到 `/root/.claude/skills`（tmpfs），再 `exec node /opt/agent-hub/server.js`。
 2. `server.js`：
    - `loadSettings()` 读取 `DATA_DIR/settings.json`；
    - `applyModelConfig()` 写入各 agent 模型配置，并把 Codex key 放进 `AGENT_HUB_CODEX_KEY`；
+   - `applyT3ClaudeModels()` 把 Claude 的额外模型写进 T3 的 `providerInstances.claudeAgent.config.customModels`；
    - `applyBrowserConfig()` 异步写入/清理 `agenthub-cdp` MCP；
    - 启动 Hono，监听 `ADMIN_BIND:ADMIN_PORT`；
    - `ManagedProcess` 用 `t3 serve --host $T3_BIND --port $T3_PORT` 拉起 T3，按配置恢复 Multica。
-3. 所有后台路由（除 `/healthz`）都经过 Basic Auth；用户名随意，密码是 `ADMIN_TOKEN`。
+3. 后台路由除 `/healthz` 和 Anthropic 转发路径 `/anthropic-proxy/**` 外都经过 Basic Auth；转发路径由 `anthropic-proxy.js` 单独校验请求里的 key。
 
 ## 关键约定
 
@@ -168,6 +169,7 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 5. `docker-compose.yml`：需要持久化的配置目录加挂载，路径用 `${CONFIG_DIR:-./config}/<name>:/root/...`。
 6. `init.sh`：在 `CONFIG_DIR` 下建对应目录并设置权限。
 7. 更新 `README.md`、本文件和后台 UI 的说明。
+8. 在 `CHANGELOG.md` 追加一条记录。
 
 ### 新增后台 API
 
@@ -182,11 +184,12 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 - 改完用下面的方法做语法检查：
 
 ```bash
-python3 - <<'PY'
-import re
-html = open('admin/public/index.html', encoding='utf-8').read()
-open('/tmp/admin-check.mjs','w').write('\n'.join(re.findall(r'<script[^>]*>(.*?)</script>', html, re.S)))
-PY
+node -e '
+const fs = require("fs");
+const html = fs.readFileSync("admin/public/index.html", "utf8");
+const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+fs.writeFileSync("/tmp/admin-check.mjs", scripts.join("\n"));
+'
 node --check /tmp/admin-check.mjs
 ```
 
@@ -203,7 +206,8 @@ node --check /tmp/admin-check.mjs
 node --check admin/server.js
 for f in admin/lib/*.js; do node --check "$f"; done
 bash -n entrypoint.sh init.sh
-python3 -I -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('yaml ok')"
+# compose 语法：有 Docker 时 `docker compose config -q`；
+# 没有 Docker 时用任意 YAML 解析器，例如 `npx --yes yaml@2 docker-compose.yml >/dev/null`
 
 # 2. 后台依赖（改了 package.json 才需要）
 cd admin && npm ci --omit=dev --no-fund --no-audit && cd ..

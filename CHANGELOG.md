@@ -5,6 +5,19 @@
 
 ## 2026-11-22
 
+### 文档校对（README / AGENTS）
+
+- README 目录树补齐 `admin/lib/anthropic-proxy.js`、`admin/lib/t3-models.js`、
+  `admin/package.json`、`admin/package-lock.json`、`CHANGELOG.md`、`.dockerignore` 等。
+- 删除 README 里残留的会话 token 安全提示（属于对话内容，不应留在项目文档）。
+- 补充：多模型 / 视觉 / 推理的能力标记、Claude 额外模型写入 T3 设置、
+  技能共享/专有分层、中文字体、何时需要 `--build`。
+- “这次改了什么”改为“历史改动”，并指向本文件。
+- AGENTS 启动链路补上 `applyT3ClaudeModels()` 和 `/anthropic-proxy` 的 Basic Auth 例外。
+- 前端内联脚本与 compose YAML 的校验命令改为 Node / 可选 YAML 解析器
+  （当前容器没有 python3）。
+- 已核对：`admin/lib/*.js`、实际 Hono 路由、`.env.example`、MCP 写入路径、字体包。
+
 ### Skills 分共享 / 专有两层（修正挂载设计）
 
 - 需求：`WORKSPACE_DIR/.agents/skills` 是共享技能；`CONFIG_DIR/<agent>/skills`
