@@ -23,6 +23,7 @@ T3 Code Agent Hub：在单个 Docker 容器里运行 T3 Code 控制面、多个 
 | `admin/server.js` | Hono 后台路由 + 子进程 supervisor（T3、Multica） |
 | `admin/lib/store.js` | 设置读写、原子写入、Basic Auth token |
 | `admin/lib/models.js` | 第三方模型配置生成/清理，返回需要注入的环境变量 |
+| `admin/lib/t3-models.js` | 把 Claude 的额外模型写进 T3 自己的 `providerInstances.claudeAgent.config.customModels`（T3 的 Claude 选择器只认这里） |
 | `admin/lib/anthropic-proxy.js` | 挂在管理后台同端口 `/anthropic-proxy` 的 Anthropic 转发：去掉 Claude Code 的 `x-anthropic-billing-header` 块，再转发到真实上游 |
 | `admin/lib/browser.js` | CDP 探测、`chrome-devtools-mcp` 管理、四个 agent 的 MCP 配置写入/清理、T3 浏览器状态 |
 | `admin/lib/agents.js` | Agent/工具版本查询与 npm 更新 |
@@ -30,6 +31,7 @@ T3 Code Agent Hub：在单个 Docker 容器里运行 T3 Code 控制面、多个 
 | `admin/lib/procs.js` | 子进程管理、进程组终止、环形日志 |
 | `admin/lib/t3.js` | `t3 pair` 解析 |
 | `admin/public/index.html` | 单页 UI，所有 CSS/JS 内联 |
+| `CHANGELOG.md` | 按时间记录每次改动和踩过的坑；改完代码要追加，方便后续 agent 了解现状 |
 
 运行时目录（默认在宿主机 `CONFIG_DIR=./config` 或 `WORKSPACE_DIR=./workspace` 下，均已 gitignore）：
 
@@ -83,6 +85,7 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 - `chrome-devtools-mcp` 镜像内装在 `/usr/local`；后台更新会装进持久卷 `/opt/agents`，并优先使用卷里的版本。
 - **T3 自带预览浏览器不能接外部 CDP**：它固定启动自己下载的 headless Chrome，用 `--remote-debugging-pipe` 控制。T3 内 agent 用 `preview_*` 工具；外部 CDP 是另一套给 agent 用的工具。
 - root 容器必须保留 `T3CODE_SERVER_BROWSER_SANDBOX=0`，否则 Chrome sandbox 起不来；`shm_size: ${SHM_SIZE:-1g}` 的默认值也不要删。
+- 镜像必须保留 `fonts-noto-cjk` 和 `fonts-noto-color-emoji`：T3 的预览浏览器用容器系统字体，缺中文包时网页会显示成方块（百度、中文站点最明显）。这是运行时 Chrome 的问题，不是 T3 或 CDP 配置问题。
 
 ### 4. 模型配置
 
@@ -94,6 +97,8 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 - OpenCode / Pi 两种协议都支持。
 - **默认模型、快速模型和额外模型都要写进模型列表**：配置里的 `models[]` 是完整列表（`normalizeModels` 会把 `defaultModel` / `fastModel` 自动补进去）。OpenCode 用 `providers.agenthub.models` + 顶层 `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现。
 - **视觉能力按模型声明**：勾选“视觉”时写 OpenCode `capabilities.input = ["text","image"]`、Pi `input = ["text","image"]`、Codex `input_modalities = ["text","image"]`。不勾选就不写，按纯文本处理；不要假设 agent 会自己探测网关模型的图片能力。Claude Code 没有对应配置项。
+- **思考等级按模型声明**：勾选“推理”时，Pi 写 `reasoning: true`（T3 的 Pi 驱动只有看到这个字段才显示思考等级）；Claude 的对应模型会在 T3 设置里生成 `effort` 选项，等级优先取网关 `/v1/models` 的 `reasoning_efforts`，取不到时用 `low/high/max` 兜底。OpenCode 的思考档位来自 provider 的 `variants`，这里不写。
+- **Claude 的额外模型必须写 T3 设置**：T3 的 Claude 选择器只从 CLI 探测结果和 `providerInstances.claudeAgent.config.customModels` 取模型，`ANTHROPIC_MODEL` 只能决定主模型。`admin/lib/t3-models.js` 会写 `$T3CODE_HOME/userdata/settings.json`（默认 `~/.t3/userdata/settings.json`），按当前配置**整体替换** hub 管理的 `customModels`；取消 Claude 分配时清空。该字段由 Agent Hub 独占管理，不要在里面手工加模型。T3 会在下次 provider 状态刷新时读取（实测写入后约 20 秒出现在缓存里）；保存模型配置时 `server.js` 仍会重启 T3 以确保刷新。
 - Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入。**新增、替换或取消 Codex 分配后必须重启 T3**，否则旧 key 会残留；`server.js` 已有这段逻辑，改动时不要破坏。
 - 保存模型配置后 `server.js` 会重启 T3 并等待就绪（`waitForT3Ready`）；T3 的模型列表在启动时读取，不重启不会刷新。
 - **Codex 的模型选择器来自 app-server 的 `model/list`**。T3 不会从 `config.toml` 的 `model` 推断列表；后台会写 `~/.codex/agenthub-models.json` 并把 `model_catalog_json` 指向它，目录条目以 `codex debug models --bundled` 的输出为模板（`model_catalog_json` 要求完整的 `base_instructions`，手写容易缺字段导致整份目录被忽略）。不要改成只写 `models.json` 或只写 `model`。
@@ -227,4 +232,6 @@ docker logs -f t3code
 - 不要在 `network_mode: host` 下加 `ports:`，也不要把 `T3_PORT` / `ADMIN_PORT` 描述成端口映射。
 - 不要把 T3 预览浏览器改成外部 CDP：上游没有这个能力，改了也不会生效。
 - 不要在未重启 T3 的情况下声称 Codex key 已切换。
+- 不要在未确认 T3 provider 状态已刷新（或未重启 T3）的情况下声称 Claude 的额外模型已出现在选择器里。
+- 不要改完代码只更新 README / AGENTS.md 中的一处；模型、端口、挂载、镜像依赖的改动要同时更新本文件、`README.md` 和 `CHANGELOG.md`。
 - 不要在没有实际运行验证的情况下声称功能可用；先跑“验证”一节的命令。

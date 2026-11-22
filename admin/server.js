@@ -14,6 +14,7 @@ import {
 } from './lib/browser.js';
 import { ANTHROPIC_PROXY_PATH, AnthropicProxy } from './lib/anthropic-proxy.js';
 import { applyModelConfig, normalizeModels, redactModels } from './lib/models.js';
+import { applyT3ClaudeModels } from './lib/t3-models.js';
 import * as multica from './lib/multica.js';
 import { ManagedProcess } from './lib/procs.js';
 import {
@@ -95,12 +96,19 @@ async function multicaAvailable() {
 // 不再单独监听端口。
 const anthropicProxy = process.env.CLAUDE_PROXY === '0' ? null : new AnthropicProxy();
 
-function applyModels() {
+async function applyModels() {
   const result = applyModelConfig(settings.models);
   anthropicProxy?.configure(settings.models);
   for (const key of MANAGED_ENV) delete process.env[key];
   for (const [key, value] of Object.entries(result.env || {})) {
     if (value) process.env[key] = value;
+  }
+  // Claude 的额外模型不能靠环境变量，必须写进 T3 自己的 providerInstances。
+  try {
+    const t3Models = await applyT3ClaudeModels(settings.models);
+    if (t3Models.warning) result.warnings.push(t3Models.warning);
+  } catch (err) {
+    result.warnings.push(`写入 T3 的 Claude 模型列表失败: ${err.message}`);
   }
   for (const warning of result.warnings || []) adminLog(`[models] ${warning}`);
   return result;
@@ -117,7 +125,7 @@ function modelsSignature(models) {
       profile.defaultModel,
       profile.fastModel,
       (profile.models || [])
-        .map((model) => `${model.id}:${model.vision ? 1 : 0}:${model.name || ''}`)
+        .map((model) => `${model.id}:${model.vision ? 1 : 0}:${model.reasoning ? 1 : 0}:${model.name || ''}`)
         .join(','),
       profile.contextWindow || 0,
       profile.openaiApi,
@@ -145,7 +153,7 @@ async function waitForT3Ready(timeoutMs = 20000) {
   return false;
 }
 
-const bootModels = applyModels();
+const bootModels = await applyModels();
 adminLog(
   `models applied at boot: ${bootModels.written.length} file(s), ${bootModels.warnings.length} warning(s)`,
 );
@@ -369,7 +377,7 @@ app.put('/api/models', async (c) => {
     settings.models = normalized;
     saveSettings(settings);
 
-    const result = applyModels();
+    const result = await applyModels();
     const nextCodexKey = result.env.AGENT_HUB_CODEX_KEY || '';
     const codexKeyChanged = previousCodexKey !== nextCodexKey;
     const modelsChanged = modelsSignature(previousModels) !== modelsSignature(normalized);

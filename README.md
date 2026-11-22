@@ -123,6 +123,8 @@ environment:
 - 给 Claude/Codex 分配了协议不兼容的配置时，会打警告并清掉后台之前写入的配置，不会继续沿用旧端点；
 - **默认模型、快速模型和“更多模型”都会写入 OpenCode / Pi / Codex 的模型列表**：OpenCode 用 `providers.agenthub.models` + `model` / `small_model`，Pi 用 `models[]`，Codex 用 `model_catalog_json`。只写 `defaultModel` 会让快速模型和额外模型在 T3 里根本不出现；
 - 每个模型可以勾选 **“视觉”**：OpenCode 写 `capabilities.input = ["text","image"]`，Pi 写 `input = ["text","image"]`，Codex 写 `input_modalities = ["text","image"]`。不勾选时按纯文本处理；Claude Code 没有对应开关，能否识图取决于模型和网关本身；
+- 每个模型可以勾选 **“推理”**：Pi 写 `reasoning: true`，T3 里才会出现思考等级选择；Claude 的自定义模型会在 T3 设置里生成 `effort` 选项，等级优先取网关 `/v1/models` 的 `reasoning_efforts`。OpenCode 的思考档位由 provider 的 `variants` 决定，这里不写；
+- **Claude 的额外模型写进 T3 自己的设置**：`$T3CODE_HOME/userdata/settings.json` 的 `providerInstances.claudeAgent.config.customModels`（默认 `~/.t3/userdata/settings.json`）。T3 的 Claude 选择器只认这里，`ANTHROPIC_MODEL` 只决定主模型；该字段由后台整体管理；T3 会在下次 provider 状态刷新时读取，保存模型配置时后台也会重启 T3；
 - **Codex 的自定义模型会出现在 T3 选择器里**：后台写入 `~/.codex/agenthub-models.json` 并设置 `model_catalog_json`，条目由 `codex debug models --bundled` 生成（目录需要完整的 instructions，手写容易缺字段）；
 - 删除某个 agent 的分配后，后台会移除自己写入的 provider 配置。
 
@@ -216,7 +218,7 @@ T3 自己的预览浏览器：
 
 - T3 的预览浏览器固定使用它自己下载到 `~/.t3/tools/chrome-headless-shell` 的 headless Chrome，通过 `--remote-debugging-pipe` 控制，**不支持改接外部 CDP**（源码里没有这个选项）。所以这里的两件事要分开看：外部 CDP 是给 agent 用的额外工具；T3 预览用的是它自己的浏览器。
 - 在 root 容器里，Chrome sandbox 无法启动，compose 已设置 `T3CODE_SERVER_BROWSER_SANDBOX=0`（T3 官方支持的方式），并加了 `shm_size`（默认 `1g`，可用 `.env` 的 `SHM_SIZE` 调大）。
-- 镜像已预装 T3 `browser setup` 对应的 Chrome 运行库和字体（`libnss3`、`libgbm1`、`fontconfig`、`fonts-liberation` 等）。如果 T3 预览仍报缺库，先看 `CONFIG_DIR/logs/t3.log` 的具体报错；容器内 `t3 browser setup` 只会再检查和安装系统包，不会解决 root sandbox 限制。
+- 镜像已预装 T3 `browser setup` 对应的 Chrome 运行库和字体（`libnss3`、`libgbm1`、`fontconfig`、`fonts-liberation`、`fonts-noto-cjk`、`fonts-noto-color-emoji`）。缺中文字体时中文网页会显示成方块，这是容器字体问题，不是 T3/CDP 配置问题。如果 T3 预览仍报缺库，先看 `CONFIG_DIR/logs/t3.log` 的具体报错；容器内 `t3 browser setup` 只会再检查和安装系统包，不会解决 root sandbox 限制。
 - T3 内的 agent 还可以使用 T3 注入的 `preview_*` MCP 工具操作内置浏览器；外部 CDP MCP 是另一套工具，二者可以同时存在。
 
 

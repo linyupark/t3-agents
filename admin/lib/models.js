@@ -16,7 +16,7 @@ function fail(message) {
 }
 
 // 配置里的模型条目：id 是发给网关的真实模型 ID；name 只影响显示；
-// vision 表示该模型接受图片输入（OpenCode / Pi / Codex 会据此写能力标记）。
+// vision 表示该模型接受图片输入，reasoning 表示它支持思考等级。
 // 旧配置只有 defaultModel / fastModel，normalizeModels 会把它们补进列表。
 function normalizeModelEntry(raw, profileId) {
   const id = String(raw?.id ?? raw ?? '').trim();
@@ -26,6 +26,7 @@ function normalizeModelEntry(raw, profileId) {
     id,
     name: String(raw?.name || '').trim(),
     vision: raw?.vision === true,
+    reasoning: raw?.reasoning === true,
   };
 }
 
@@ -82,6 +83,7 @@ export function normalizeModels(input) {
         return;
       }
       existing.vision = existing.vision || entry.vision;
+      existing.reasoning = existing.reasoning || entry.reasoning;
       existing.name = existing.name || entry.name;
     };
     addModel(normalizeModelEntry({ id: profile.defaultModel }, profile.id));
@@ -148,6 +150,7 @@ function modelEntries(profile) {
       id,
       name: String(entry?.name || '').trim(),
       vision: entry?.vision === true,
+      reasoning: entry?.reasoning === true,
     });
   }
   return list;
@@ -427,6 +430,8 @@ export function applyModelConfig(models) {
           name: model.name || model.id,
           // Pi 的自定义模型默认按纯文本处理；显式写 image 才会把图片传给模型。
           ...(model.vision ? { input: ['text', 'image'] } : {}),
+          // T3 的 Pi 驱动只有在模型声明 reasoning 时才显示思考等级选择。
+          ...(model.reasoning ? { reasoning: true } : {}),
         })),
       };
       writeJson(modelsFile, modelsDoc, 0o600);

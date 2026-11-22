@@ -97,6 +97,7 @@
   .models-head label { margin: 0; }
   .model-row { display: grid; grid-template-columns: 1.4fr 1fr auto auto; gap: 8px; align-items: center; margin-top: 6px; }
   .model-row input[type="checkbox"] { width: auto; }
+  .model-flags { display: flex; gap: 10px; }
   .model-check { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 12px; white-space: nowrap; }
   .assignments { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
   .qr { width: 240px; max-width: 100%; background: #fff; border-radius: 10px; padding: 8px; }
@@ -167,9 +168,9 @@
       Anthropic 端点默认从 baseUrl 去掉末尾的 <code>/v1</code>，也可以用 Anthropic baseUrl 单独指定
       （例如 DeepSeek 的 <code>https://api.deepseek.com/anthropic</code>）。
       Codex 需要 OpenAI Responses；OpenCode / Pi 两种都支持。
-      保存后会自动写入各 agent 的配置文件。默认、快速和“更多模型”都会写进 OpenCode / Pi / Codex 的模型列表；
-      勾选“视觉”表示该模型接受图片输入，会写进 OpenCode / Pi / Codex 的能力标记
-      （Claude Code 没有对应开关，能否识图取决于网关和模型本身）。
+      保存后会自动写入各 agent 的配置文件。默认、快速和“更多模型”都会写进 OpenCode / Pi / Codex / Claude 的模型列表；
+      勾选“视觉”表示该模型接受图片输入；勾选“推理”会让 Pi 显示思考等级、并按网关返回的等级给 Claude 生成 effort 选项
+      （官方的真实能力以网关 /v1/models 为准，不要凭猜测勾选）。
       Codex 的自定义模型会通过 model_catalog_json 出现在选择器里。
     </p>
     <div id="profiles"></div>
@@ -404,13 +405,18 @@ function appendModelRow(container, entry) {
   name.placeholder = '显示名称（可选）';
   name.value = entry.name || '';
 
-  const check = document.createElement('label');
-  check.className = 'model-check';
-  const vision = document.createElement('input');
-  vision.type = 'checkbox';
-  vision.dataset.m = 'vision';
-  vision.checked = entry.vision === true;
-  check.append(vision, document.createTextNode('视觉'));
+  const flags = document.createElement('div');
+  flags.className = 'model-flags';
+  for (const [key, label] of [['vision', '视觉'], ['reasoning', '推理']]) {
+    const check = document.createElement('label');
+    check.className = 'model-check';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.m = key;
+    box.checked = entry[key] === true;
+    check.append(box, document.createTextNode(label));
+    flags.appendChild(check);
+  }
 
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -418,7 +424,7 @@ function appendModelRow(container, entry) {
   remove.textContent = '删除';
   remove.onclick = () => row.remove();
 
-  row.append(id, name, check, remove);
+  row.append(id, name, flags, remove);
   container.appendChild(row);
 }
 
@@ -574,6 +580,7 @@ function collectProfiles() {
         id: row.querySelector('[data-m="id"]').value.trim(),
         name: row.querySelector('[data-m="name"]').value.trim(),
         vision: row.querySelector('[data-m="vision"]').checked,
+        reasoning: row.querySelector('[data-m="reasoning"]').checked,
       }))
       .filter((model) => model.id);
 
