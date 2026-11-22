@@ -164,17 +164,20 @@ multica daemon start --foreground
 sudo find "${WORKSPACE_DIR:-./workspace}/.tmp" -type f -mtime +7 -delete
 ```
 
-全局技能目录：
+技能分两层：**共享技能**所有 agent 都能用，**专有技能**只给某一个 agent。
 
-```text
-${WORKSPACE_DIR:-./workspace}/.agents/skills/<skill-name>/SKILL.md
-```
+| 用途 | 宿主机路径（默认） | 容器内位置 | 谁读取 |
+|---|---|---|---|
+| 共享 | `WORKSPACE_DIR/.agents/skills/<name>/SKILL.md` | `/root/.agents/skills` | 全部 agent |
+| Claude 专有 | `CONFIG_DIR/claude/skills/<name>/SKILL.md` | `/root/.claude-local-skills` → 符号链接进 `/root/.claude/skills` | Claude |
+| Codex 专有 | `CONFIG_DIR/codex/skills/<name>/SKILL.md` | `/root/.codex/skills` | Codex |
+| OpenCode 专有 | `CONFIG_DIR/opencode/skills/<name>/SKILL.md` | `/root/.config/opencode/skills` | OpenCode |
+| Pi 专有 | `CONFIG_DIR/pi/agent/skills/<name>/SKILL.md` | `/root/.pi/agent/skills` | Pi |
 
-- Codex、OpenCode、Pi 原生读取 `~/.agents/skills`，compose 已把 `WORKSPACE_DIR/.agents` 挂到 `/root/.agents`；
-- Claude Code 只读 `~/.claude/skills`，compose 把同一个 `skills` 目录单独挂了进去；
-- **不要往 `CONFIG_DIR/claude/skills` 放技能**：`/root/.claude/skills` 的嵌套挂载会把 `config/claude/skills` 完全遮住，容器里根本看不到它。请统一放在上面的共享目录；
-- 如果技能已经在 `CONFIG_DIR/claude/skills` 里，可以在宿主机重跑一次 `./init.sh`（会把原生目录里的技能用 `cp -a -n` 复制到共享目录，不覆盖同名文件），或者手动 `cp -a config/claude/skills/. workspace/.agents/skills/`；
-- 新增技能后要新开 agent 会话（Claude / Codex）或重启对应进程才会加载；Pi 可在会话里 `/reload`。
+- Codex / OpenCode / Pi 原生同时读取 `~/.agents/skills` 和自己的用户技能目录，所以共享 + 专有直接生效；
+- Claude 只读 `~/.claude/skills`，`entrypoint.sh` 会把 `CONFIG_DIR/claude/skills` 和共享目录用**符号链接**合并到 `/root/.claude/skills`（tmpfs 视图，Claude 官方支持技能目录内的符号链接）。同名时 Claude 专有版本优先；
+- 新增/删除技能后，符号链接会在 30 秒内同步，但 agent 要**新开会话**才会重新扫描技能；
+- 不要把专有技能放进共享目录，也不要把共享技能复制进专有目录。
 
 技能使用通用的 Agent Skills 格式：
 
@@ -188,8 +191,6 @@ description: Extract text and tables from PDF files. Use when reading, convertin
 ```
 
 同名技能不会合并：OpenCode 按优先级覆盖，Pi 保留先发现的，建议目录名和 frontmatter 的 `name` 保持一致。如果 `WORKSPACE_DIR` 本身是 git 仓库，建议把 `.agents/`、`.tmp/` 加进它的 `.gitignore`。
-
-`init.sh` 只在**执行时**把 `CONFIG_DIR/claude/skills`、`CONFIG_DIR/opencode/skills`、`CONFIG_DIR/pi/agent/skills` 里已有的技能**复制**到共享目录（`cp -a -n`，不覆盖同名文件、不删除原文件），运行后再放进这些目录的技能不会自动同步；确认共享目录里的版本可用后，可以自行清掉各原生目录里的旧副本。
 
 ### 7. 浏览器 / CDP
 
@@ -249,7 +250,11 @@ T3 自己的预览浏览器：
 │   └── public/index.html  # 单页 UI（无构建）
 ├── config/                # CONFIG_DIR 默认值，运行时生成，已 gitignore
 │   ├── claude/
-│   │   └── .claude.json   # Claude 全局状态（CLAUDE_CONFIG_DIR）
+│   │   ├── .claude.json   # Claude 全局状态（CLAUDE_CONFIG_DIR）
+│   │   └── skills/        # Claude 专有技能
+│   ├── codex/skills/      # Codex 专有技能
+│   ├── opencode/skills/   # OpenCode 专有技能
+│   ├── pi/agent/skills/   # Pi 专有技能
 │   ├── git/
 │   │   └── gitconfig      # git 全局配置（GIT_CONFIG_GLOBAL）
 │   ├── cache/             # ~/.cache

@@ -5,16 +5,23 @@
 
 ## 2026-11-22
 
-### Skills 目录被嵌套挂载遮住（文档修正）
+### Skills 分共享 / 专有两层（修正挂载设计）
 
-- 现象：把技能放进宿主机 `CONFIG_DIR/claude/skills` 后，Claude 仍识别不到。
-- 原因：compose 把 `${WORKSPACE_DIR}/.agents/skills` 挂到了 `/root/.claude/skills`，
-  这个子挂载会完全遮住 `CONFIG_DIR/claude/skills`；`init.sh` 只在执行时用
-  `cp -a -n` 把原生目录复制到共享目录，运行后新增的技能不会自动同步。
-- 正确位置：`WORKSPACE_DIR/.agents/skills/<name>/SKILL.md`，该目录同时挂给
-  `~/.agents/skills`（Codex/OpenCode/Pi）和 `~/.claude/skills`（Claude）。
-- 已在 compose 注释、`README.md` §6、`AGENTS.md` §8 写明；新增技能后要新开
-  agent 会话才会加载。
+- 需求：`WORKSPACE_DIR/.agents/skills` 是共享技能；`CONFIG_DIR/<agent>/skills`
+  是某个 agent 的专有技能。
+- 旧问题：compose 把共享 `skills` 直接挂到 `/root/.claude/skills`，遮住了
+  `CONFIG_DIR/claude/skills`；`init.sh` 还把专有技能复制进共享目录，无法分层。
+- 新设计：
+  - Codex / OpenCode / Pi 原生同时读取 `~/.agents/skills` 和自己的目录
+    （`~/.codex/skills`、`~/.config/opencode/skills`、`~/.pi/agent/skills`），无需改动。
+  - Claude 只认 `~/.claude/skills`：compose 把它挂成 **tmpfs**，
+    `CONFIG_DIR/claude/skills` 另挂到 `/root/.claude-local-skills`，
+    `entrypoint.sh` 的 `sync_claude_skills()` 用符号链接合并两者，专有优先。
+    Claude 官方支持技能目录内的符号链接。
+  - `init.sh` 不再把专有技能合并到共享目录，只创建各目录。
+- 新增/删除技能后 30 秒内同步符号链接，但 agent 要新开会话才会重新扫描。
+- 已验证各 agent 的原生技能路径；Claude 的符号链接行为以官方文档
+  （symlinked folders）为准。
 
 ### Claude 额外模型、Pi 思考等级、中文字体
 

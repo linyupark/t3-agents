@@ -142,10 +142,20 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 
 ### 8. Skills（技能）
 
-- 唯一的技能目录是 `WORKSPACE_DIR/.agents/skills/<name>/SKILL.md`（默认 `./workspace/.agents/skills`）；`SKILL.md` 必须有 YAML frontmatter 的 `name` / `description`，目录名建议与 `name` 一致。
-- compose 把这个目录同时挂到 `~/.agents/skills`（Codex / OpenCode / Pi）和 `~/.claude/skills`（Claude）。
-- **`CONFIG_DIR/claude/skills` 会被 `/root/.claude/skills` 的嵌套挂载完全遮住**，容器里看不到；不要往那里放技能。`init.sh` 只在执行时把 `config/claude/skills` 等原生目录复制到共享目录（`cp -a -n`），运行后新增的技能不会自动同步。
-- 技能在 agent 进程/会话启动时加载；新增或修改后要新开会话（Pi 可用 `/reload`）才会生效。
+技能分共享和专有两层，`SKILL.md` 必须有 YAML frontmatter 的 `name` / `description`：
+
+| 用途 | 宿主机路径 | 容器内位置 | 读取者 |
+|---|---|---|---|
+| 共享 | `WORKSPACE_DIR/.agents/skills` | `/root/.agents/skills` | 全部 agent |
+| Claude 专有 | `CONFIG_DIR/claude/skills` | `/root/.claude-local-skills` → 符号链接进 `/root/.claude/skills` | Claude |
+| Codex 专有 | `CONFIG_DIR/codex/skills` | `/root/.codex/skills` | Codex |
+| OpenCode 专有 | `CONFIG_DIR/opencode/skills` | `/root/.config/opencode/skills` | OpenCode |
+| Pi 专有 | `CONFIG_DIR/pi/agent/skills` | `/root/.pi/agent/skills` | Pi |
+
+- Codex / OpenCode / Pi 原生同时读取 `~/.agents/skills` 和自己的用户技能目录，不需要额外同步。
+- Claude 只认 `~/.claude/skills`，所以 compose 把该路径挂成 **tmpfs**，`entrypoint.sh` 里的 `sync_claude_skills()` 把专有技能（优先）和共享技能用符号链接放进去；Claude 官方支持技能目录中的符号链接。
+- 不要用文件级/嵌套 bind mount 把共享目录直接挂到 `/root/.claude/skills`：那会遮住 `CONFIG_DIR/claude/skills`，并且无法同时表达两层。也不要再让 `init.sh` 把专有技能复制进共享目录。
+- `sync_claude_skills()` 每 30 秒跑一次，新增/删除会同步；但 agent 只在进程/会话启动时扫描技能，必须新开会话（Pi 可 `/reload`）才能看到。
 
 ## 常见改动
 
@@ -238,6 +248,7 @@ docker logs -f t3code
 - 不要在新增挂载或 `init.sh` 里硬编码 `./config`、`./workspace`；用 `.env` 的 `CONFIG_DIR` / `WORKSPACE_DIR`。
 - 不要在 `network_mode: host` 下加 `ports:`，也不要把 `T3_PORT` / `ADMIN_PORT` 描述成端口映射。
 - 不要把 T3 预览浏览器改成外部 CDP：上游没有这个能力，改了也不会生效。
+- 不要把 `WORKSPACE_DIR/.agents/skills` 直接 bind mount 到 `/root/.claude/skills`：会遮住 `CONFIG_DIR/claude/skills`，破坏共享/专有分层；Claude 的视图靠 `entrypoint.sh` 的符号链接合并。
 - 不要在未重启 T3 的情况下声称 Codex key 已切换。
 - 不要在未确认 T3 provider 状态已刷新（或未重启 T3）的情况下声称 Claude 的额外模型已出现在选择器里。
 - 不要改完代码只更新 README / AGENTS.md 中的一处；模型、端口、挂载、镜像依赖的改动要同时更新本文件、`README.md` 和 `CHANGELOG.md`。

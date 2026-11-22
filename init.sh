@@ -53,6 +53,8 @@ mkdir -p \
   "$CONFIG_DIR"/pi "$CONFIG_DIR"/gemini "$CONFIG_DIR"/t3 \
   "$CONFIG_DIR"/multica "$CONFIG_DIR"/admin "$CONFIG_DIR"/logs \
   "$CONFIG_DIR"/ssh "$CONFIG_DIR"/git "$CONFIG_DIR"/cache "$CONFIG_DIR"/npm \
+  "$CONFIG_DIR"/claude/skills "$CONFIG_DIR"/codex/skills \
+  "$CONFIG_DIR"/opencode/skills "$CONFIG_DIR"/pi/agent/skills \
   "$WORKSPACE_DIR/.tmp/var-tmp" \
   "$WORKSPACE_DIR/.agents/skills" \
   "$WORKSPACE_DIR/.multica-workspaces"
@@ -99,22 +101,13 @@ fi
 
 chmod 700 "$CONFIG_DIR/admin" 2>/dev/null || true
 
-# 把各 agent 原有的全局 skills 合并到共享目录
-# （Claude/OpenCode/Pi 的原生路径都在 CONFIG_DIR 下，启用共享后会被覆盖）
-for dir in \
-  "$CONFIG_DIR/claude/skills" \
-  "$CONFIG_DIR/opencode/skills" \
-  "$CONFIG_DIR/opencode/skill" \
-  "$CONFIG_DIR/pi/agent/skills" \
-  "$CONFIG_DIR/codex/skills"; do
-  [ -d "$dir" ] || continue
-  [ -n "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit)" ] || continue
-  if cp -a -n "$dir"/. "$WORKSPACE_DIR/.agents/skills/" 2>/dev/null; then
-    echo "[✓] 已合并 $dir 到 $WORKSPACE_DIR/.agents/skills"
-  else
-    echo "[!] 合并 $dir 失败，请手动复制到 $WORKSPACE_DIR/.agents/skills"
-  fi
-done
+# 技能目录：
+#   共享技能（所有 agent）  WORKSPACE_DIR/.agents/skills
+#   Claude 专有             CONFIG_DIR/claude/skills
+#   Codex 专有              CONFIG_DIR/codex/skills
+#   OpenCode 专有           CONFIG_DIR/opencode/skills
+#   Pi 专有                 CONFIG_DIR/pi/agent/skills
+# 各 agent 原生就支持“共享目录 + 自己的目录”，这里不再把专有技能合并进共享目录。
 
 # Git 全局配置
 if [ -f ~/.gitconfig ] && [ ! -s "$CONFIG_DIR/git/gitconfig" ]; then

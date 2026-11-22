@@ -61,12 +61,11 @@ services:
       - ${WORKSPACE_DIR:-./workspace}/.tmp:/tmp
       - ${WORKSPACE_DIR:-./workspace}/.tmp/var-tmp:/var/tmp
 
-      # 全局共享 skills：Codex / OpenCode / Pi 原生读取 ~/.agents/skills
+      # 全局共享 skills：所有 agent 都会读取 ~/.agents/skills
       - ${WORKSPACE_DIR:-./workspace}/.agents:/root/.agents
-      # Claude Code 只读 ~/.claude/skills，单独挂同一份目录。
-      # 注意：这个子挂载会遮住 CONFIG_DIR/claude/skills；技能统一放
-      # WORKSPACE_DIR/.agents/skills，不要放进 config/claude/skills（容器里不可见）。
-      - ${WORKSPACE_DIR:-./workspace}/.agents/skills:/root/.claude/skills
+      # Claude 专有 skills：entrypoint 会用符号链接把它和共享技能合并到
+      # /root/.claude/skills（tmpfs 视图）。Claude 官方支持技能目录里的符号链接。
+      - ${CONFIG_DIR:-./config}/claude/skills:/root/.claude-local-skills:ro
 
       # 全局 npm 包持久化：docker compose down/up 后不再重装
       - agent_npm:/opt/agents
@@ -100,6 +99,12 @@ services:
 
     # 子进程 supervisor 需要时间按进程组停止 t3/multica
     stop_grace_period: 20s
+
+    # Claude 的用户技能目录是容器内合并视图：entrypoint 把
+    # /root/.claude-local-skills（Claude 专有）和 /root/.agents/skills（共享）
+    # 用符号链接放进来。用 tmpfs 避免把链接写进宿主机 CONFIG_DIR/claude。
+    tmpfs:
+      - /root/.claude/skills:size=64m,mode=0755
 
     # Docker 默认 /dev/shm 只有 64MB，Chrome 渲染大页面容易崩
     shm_size: ${SHM_SIZE:-1g}

@@ -30,6 +30,32 @@ fi
 [ -s /root/.claude/.claude.json ] || printf '{}\n' > /root/.claude/.claude.json
 chmod 600 /root/.claude/.claude.json 2>/dev/null || true
 
+# Claude 的用户技能目录：compose 把 /root/.claude/skills 挂成 tmpfs（容器内视图），
+# 这里把 Claude 专有技能（/root/.claude-local-skills）和全局共享技能
+# （/root/.agents/skills）用符号链接合并进去。Claude 官方支持技能目录内的符号链接，
+# 会读取目标目录的 SKILL.md。专有技能先处理，同名时 Claude 专有版本优先。
+sync_claude_skills() {
+  mkdir -p /root/.claude/skills
+  local source entry name
+  for source in /root/.claude-local-skills /root/.agents/skills; do
+    [ -d "$source" ] || continue
+    for entry in "$source"/*; do
+      [ -d "$entry" ] || continue
+      name=${entry##*/}
+      [ -e "/root/.claude/skills/$name" ] && continue
+      ln -s "$entry" "/root/.claude/skills/$name" 2>/dev/null || true
+    done
+  done
+  # 源目录里已删除的技能：清掉悬空链接
+  for entry in /root/.claude/skills/*; do
+    [ -L "$entry" ] || continue
+    [ -e "$entry" ] || rm -f "$entry"
+  done
+}
+sync_claude_skills
+# 运行期间新增/删除技能时，30 秒内同步到 Claude 的视图；新会话启动时会重新扫描。
+( while sleep 30; do sync_claude_skills; done ) &
+
 # 已有配置目录的权限修正（.ssh 必须是 700）
 if [ -d /root/.ssh ]; then
   chmod 700 /root/.ssh 2>/dev/null || true
