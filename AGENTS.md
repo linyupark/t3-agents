@@ -23,6 +23,7 @@ T3 Code Agent Hub：在单个 Docker 容器里运行 T3 Code 控制面、多个 
 | `admin/server.js` | Hono 后台路由 + 子进程 supervisor（T3、Multica） |
 | `admin/lib/store.js` | 设置读写、原子写入、Basic Auth token |
 | `admin/lib/models.js` | 第三方模型配置生成/清理，返回需要注入的环境变量 |
+| `admin/lib/anthropic-proxy.js` | 本机 Anthropic 转发代理：去掉 Claude Code 的 `x-anthropic-billing-header` 块，再转发到真实上游 |
 | `admin/lib/browser.js` | CDP 探测、`chrome-devtools-mcp` 管理、四个 agent 的 MCP 配置写入/清理、T3 浏览器状态 |
 | `admin/lib/agents.js` | Agent/工具版本查询与 npm 更新 |
 | `admin/lib/multica.js` | Multica CLI 封装（config/login/daemon） |
@@ -85,10 +86,16 @@ Claude Code 写 `.claude.json` 的方式是“临时文件 + rename”。如果�
 
 ### 4. 模型配置
 
-- Claude Code 只能接 Anthropic 兼容端点。
+- Claude Code 只能接 Anthropic 兼容端点。Claude 的 SDK 会自己追加 `/v1/messages`，所以 `ANTHROPIC_BASE_URL` 必须去掉末尾的 `/v1`；`anthropic-proxy.js` 里的 `resolveAnthropicBase()` 会自动处理，`applyModelConfig()` 会打警告，不要改回原样。
+- 协议选 `both` 时，同一个配置同时给 OpenAI（Codex/OpenCode/Pi 默认）和 Anthropic（Claude）使用：OpenAI 用 `baseUrl`，Anthropic 用 `anthropicBaseUrl`，留空则自动把 `baseUrl` 末尾的 `/v1` 去掉。不要为同一个网关建两份配置。
+- Claude Code 会在请求的 `system` 数组里塞一个 `x-anthropic-billing-header:` 块，值在第三方端点上为空；部分网关（如 `llms.zj-qq.cn`）会因此返回 400 `Illegal API invocation from an unapproved channel`。`admin/lib/anthropic-proxy.js` 在本机 `127.0.0.1:3775` 去掉这个块再转发，`ANTHROPIC_BASE_URL` 指向代理。`CLAUDE_PROXY=0` 可关闭，`CLAUDE_PROXY_PORT` 可改端口。
+- 自定义模型 ID 不在 Claude Code 内置清单里时，用 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 声明窗口（配置里的“上下文窗口”字段）；否则 Claude 会按 1M 猜测。
 - Codex 只支持 OpenAI Responses（`wire_api = "responses"`）。
 - OpenCode / Pi 两种协议都支持。
+- **默认模型和快速模型都要写进模型列表**：OpenCode 用 `providers.agenthub.models` + 顶层 `model` / `small_model`，Pi 用 `models[]`。只写 `defaultModel` 会让“快速模型”在 T3 里根本不出现。
 - Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入。**新增、替换或取消 Codex 分配后必须重启 T3**，否则旧 key 会残留；`server.js` 已有这段逻辑，改动时不要破坏。
+- 保存模型配置后 `server.js` 会重启 T3 并等待就绪（`waitForT3Ready`）；T3 的模型列表在启动时读取，不重启不会刷新。
+- **Codex 的模型选择器来自 app-server 的 `model/list`**。T3 不会从 `config.toml` 的 `model` 推断列表；后台会写 `~/.codex/agenthub-models.json` 并把 `model_catalog_json` 指向它，目录条目以 `codex debug models --bundled` 的输出为模板（`model_catalog_json` 要求完整的 `base_instructions`，手写容易缺字段导致整份目录被忽略）。不要改成只写 `models.json` 或只写 `model`。
 - 给协议不兼容的 agent 分配配置时，要警告并清掉后台之前写入的配置，不能沿用旧端点。
 
 ### 5. 密钥与日志

@@ -156,8 +156,13 @@
   <section class="card wide">
     <h2>第三方模型</h2>
     <p class="hint">
-      一个配置可以分配给多个 agent。Claude Code 需要 Anthropic 兼容端点；Codex 需要 OpenAI Responses；
-      OpenCode / Pi 两种都支持。保存后会自动写入各 agent 的配置文件。
+      一个配置可以分配给多个 agent。协议选“同一配置同时支持两者”时，Claude Code 走 Anthropic 端点，
+      Codex / OpenCode / Pi 走 OpenAI 端点，不需要为同一个 baseUrl 建两份配置；
+      Anthropic 端点默认从 baseUrl 去掉末尾的 <code>/v1</code>，也可以用 Anthropic baseUrl 单独指定
+      （例如 DeepSeek 的 <code>https://api.deepseek.com/anthropic</code>）。
+      Codex 需要 OpenAI Responses；OpenCode / Pi 两种都支持。
+      保存后会自动写入各 agent 的配置文件。快速模型会作为独立模型写进 OpenCode / Pi 的模型列表，并作为小模型使用。
+      Codex 的自定义模型会通过 model_catalog_json 出现在选择器里。
     </p>
     <div id="profiles"></div>
     <div class="row">
@@ -166,7 +171,7 @@
     <div class="assignments" id="assignments"></div>
     <div class="row">
       <button class="primary" id="saveModels">保存并应用</button>
-      <span class="muted">Codex 通过环境变量取 key，保存后会自动重启 T3。</span>
+      <span class="muted">保存模型配置后会自动重启 T3；Codex 的 key 通过环境变量注入。</span>
     </div>
     <pre class="hidden" id="modelsOut"></pre>
   </section>
@@ -399,6 +404,7 @@ function renderProfiles() {
       field('协议', 'select', profile.protocol, 'protocol', [
         { value: 'openai', label: 'OpenAI 兼容' },
         { value: 'anthropic', label: 'Anthropic 兼容' },
+        { value: 'both', label: '同一配置同时支持两者' },
       ]),
     );
 
@@ -406,7 +412,7 @@ function renderProfiles() {
     grid2.className = 'grid3';
     grid2.style.marginTop = '10px';
     grid2.append(
-      field('baseUrl（通常以 /v1 结尾）', 'text', profile.baseUrl, 'baseUrl'),
+      field('baseUrl（OpenAI 一般以 /v1 结尾；Anthropic 不要带 /v1）', 'text', profile.baseUrl, 'baseUrl'),
       field('API Key', 'password', '', 'apiKey'),
       field('OpenAI 协议', 'select', profile.openaiApi, 'openaiApi', [
         { value: 'responses', label: 'Responses（Codex 必需）' },
@@ -425,7 +431,15 @@ function renderProfiles() {
       field('快速模型 ID（可选）', 'text', profile.fastModel, 'fastModel'),
     );
 
-    wrap.append(head, grid, grid2, grid3);
+    const grid4 = document.createElement('div');
+    grid4.className = 'grid2';
+    grid4.style.marginTop = '10px';
+    grid4.append(
+      field('Anthropic baseUrl（可选，留空则从 baseUrl 去掉 /v1）', 'text', profile.anthropicBaseUrl || '', 'anthropicBaseUrl'),
+      field('上下文窗口（可选，供 Claude / Codex 使用）', 'number', profile.contextWindow || '', 'contextWindow'),
+    );
+
+    wrap.append(head, grid, grid2, grid3, grid4);
     root.appendChild(wrap);
   });
 }
@@ -481,9 +495,11 @@ function collectProfiles() {
       name: value('name').trim(),
       protocol: value('protocol'),
       baseUrl: value('baseUrl').trim(),
+      anthropicBaseUrl: value('anthropicBaseUrl').trim(),
       apiKey: value('apiKey').trim(),
       defaultModel: value('defaultModel').trim(),
       fastModel: value('fastModel').trim(),
+      contextWindow: Number(value('contextWindow')) || 0,
       openaiApi: value('openaiApi'),
     };
   });
@@ -503,9 +519,11 @@ $('#addProfile').onclick = () => {
     name: `配置 ${models.profiles.length + 1}`,
     protocol: 'openai',
     baseUrl: '',
+    anthropicBaseUrl: '',
     hasApiKey: false,
     defaultModel: '',
     fastModel: '',
+    contextWindow: 0,
     openaiApi: 'responses',
   });
   renderProfiles();
@@ -737,7 +755,10 @@ $('#pairBtn').onclick = async () => {
       link.href = result.url;
       link.textContent = result.url;
       link.classList.remove('hidden');
-      $('#pairHint').textContent = result.appLink ? '扫码或打开链接；桌面端也可用 t3code:// 深链。' : '扫码或打开链接。';
+      const via = result.source === 'log' ? '（取自 T3 启动日志，若失效请先重启 T3）' : '';
+      $('#pairHint').textContent = result.appLink
+        ? `扫码或打开链接；桌面端也可用 t3code:// 深链。${via}`
+        : `扫码或打开链接。${via}`;
     } else {
       $('#pairHint').textContent = result.error || '未获取到配对链接。';
     }

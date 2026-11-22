@@ -92,7 +92,7 @@ environment:
 
 功能：
 
-- **T3 配对码**：按钮执行 `t3 pair`，解析配对链接并生成二维码；
+- **T3 配对码**：按钮执行 `t3 pair`，解析配对链接并生成二维码；如果 T3 刚重启导致命令失败，会自动回退到 `t3.log` 里最后一次 `Pairing URL:`；
 - **Agent 版本**：列出已安装/最新版本，逐个更新；
 - **浏览器 / CDP**：给所有 agent 统一配置外部 Chrome CDP，测试连接，安装/更新 `chrome-devtools-mcp`；
 - **第三方模型**：一份配置分配给多个 agent，自动生成各自配置文件；
@@ -107,17 +107,22 @@ environment:
 
 | Agent | 文件 | 说明 |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / 模型 |
-| Codex | `~/.codex/config.toml` | 自定义 provider，`wire_api = "responses"` |
-| OpenCode | `~/.config/opencode/opencode.json` | `providers.agenthub` |
+| Claude Code | `~/.claude/settings.json` | `ANTHROPIC_BASE_URL`（指向本机代理）/ `ANTHROPIC_AUTH_TOKEN` / 模型 |
+| Codex | `~/.codex/config.toml` + `~/.codex/agenthub-models.json` | 自定义 provider，`wire_api = "responses"`，`model_catalog_json` 提供选择器里的自定义模型 |
+| OpenCode | `~/.config/opencode/opencode.json` | `providers.agenthub` + `model` / `small_model` |
 | Pi | `~/.pi/agent/models.json` + `settings.json` | `agenthub` provider + 默认模型 |
 
 注意：
 
-- **Claude Code 只能接 Anthropic 兼容端点**；
+- **Claude Code 只能接 Anthropic 兼容端点**；它的 SDK 会自己在 baseUrl 后追加 `/v1/messages`，所以 `ANTHROPIC_BASE_URL` 不要再带末尾的 `/v1`（后台会自动去掉并打警告）；
+- 协议可以选 **“同一配置同时支持两者”**：同一个配置里 OpenAI 用 `baseUrl`，Claude 用 `anthropicBaseUrl`（留空则自动去掉 `baseUrl` 末尾的 `/v1`），不需要为同一个网关建两份配置；
+- Claude Code 的请求里有一个第三方网关可能拒绝的 `x-anthropic-billing-header:` 块（`llms.zj-qq.cn` 会返回 400 `Illegal API invocation from an unapproved channel`）。后台会在本机 `127.0.0.1:3775` 起一个转发代理，去掉该块后再发给上游；`CLAUDE_PROXY=0` 可关闭，`CLAUDE_PROXY_PORT` 可改端口；
+- 自定义模型 ID 不在 Claude Code 内置清单里时，用配置里的“上下文窗口”写入 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`，避免 Claude 按 1M 猜测；
 - **Codex 目前只支持 OpenAI Responses**（`wire_api = "responses"`），Chat Completions-only 的网关无法给 Codex 用；
 - Codex 的 key 通过环境变量 `AGENT_HUB_CODEX_KEY` 注入，所以新增、换 key 或**取消** Codex 分配时，后台都会重启 T3（以及正在运行的 Multica daemon），避免残留旧 key；
 - 给 Claude/Codex 分配了协议不兼容的配置时，会打警告并清掉后台之前写入的配置，不会继续沿用旧端点；
+- **默认模型和快速模型都会写入 OpenCode / Pi 的模型列表**：OpenCode 用 `model` + `small_model`，Pi 用 `models[]`，快速模型不会只存在配置里却不出现在 T3 的选择器里；
+- **Codex 的自定义模型会出现在 T3 选择器里**：后台写入 `~/.codex/agenthub-models.json` 并设置 `model_catalog_json`，条目由 `codex debug models --bundled` 生成（目录需要完整的 instructions，手写容易缺字段）；
 - 删除某个 agent 的分配后，后台会移除自己写入的 provider 配置。
 
 ### 5. Multica

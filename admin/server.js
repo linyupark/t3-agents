@@ -12,6 +12,7 @@ import {
   normalizeBrowserSettings,
   probeCdp,
 } from './lib/browser.js';
+import { AnthropicProxy } from './lib/anthropic-proxy.js';
 import { applyModelConfig, normalizeModels, redactModels } from './lib/models.js';
 import * as multica from './lib/multica.js';
 import { ManagedProcess } from './lib/procs.js';
@@ -22,7 +23,7 @@ import {
   safeEqual,
   saveSettings,
 } from './lib/store.js';
-import { pairing } from './lib/t3.js';
+import { pairing, parsePairingOutput } from './lib/t3.js';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || '/root/.agent-hub';
@@ -89,14 +90,58 @@ async function multicaAvailable() {
   return result.code === 0;
 }
 
+// Claude Code 会在 system 里带一个 `x-anthropic-billing-header:` 块，部分第三方
+// 网关（例如 llms.zj-qq.cn）会因此返回 400。用本机代理去掉这个块再转发。
+const anthropicProxy = process.env.CLAUDE_PROXY === '0'
+  ? null
+  : new AnthropicProxy({ port: Number(process.env.CLAUDE_PROXY_PORT || 3775) });
+if (anthropicProxy) anthropicProxy.start();
+
 function applyModels() {
   const result = applyModelConfig(settings.models);
+  anthropicProxy?.configure(settings.models);
   for (const key of MANAGED_ENV) delete process.env[key];
   for (const [key, value] of Object.entries(result.env || {})) {
     if (value) process.env[key] = value;
   }
   for (const warning of result.warnings || []) adminLog(`[models] ${warning}`);
   return result;
+}
+
+// T3 会缓存 OpenCode / Pi / Claude 的模型列表；只有配置真正变化时才重启。
+function modelsSignature(models) {
+  const profiles = (models?.profiles || [])
+    .map((profile) => [
+      profile.id,
+      profile.protocol,
+      profile.baseUrl,
+      profile.anthropicBaseUrl || '',
+      profile.defaultModel,
+      profile.fastModel,
+      profile.contextWindow || 0,
+      profile.openaiApi,
+      profile.apiKey || '',
+    ].join('\u0000'))
+    .sort();
+  const assignments = Object.entries(models?.assignments || {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify({ profiles, assignments });
+}
+
+async function waitForT3Ready(timeoutMs = 20000) {
+  const host = T3_BIND === '0.0.0.0' || T3_BIND === '::' ? '127.0.0.1' : T3_BIND;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!t3.isRunning()) return false;
+    try {
+      const res = await fetch(`http://${host}:${T3_PORT}/`, { signal: AbortSignal.timeout(1500) });
+      if (res.status < 500) return true;
+    } catch {
+      // 还没监听，继续等
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  adminLog(`T3 在 ${timeoutMs}ms 内没有就绪（配置已写入，可能还需要手动重启）`);
+  return false;
 }
 
 const bootModels = applyModels();
@@ -164,6 +209,7 @@ app.get('/api/status', (c) =>
     multica: multicaProc.status(),
     multicaConfigured: Boolean(settings.multica?.serverUrl),
     modelsConfigured: Boolean(settings.models?.profiles?.length),
+    anthropicProxy: anthropicProxy ? anthropicProxy.url : null,
   }),
 );
 
@@ -184,9 +230,33 @@ app.post('/api/agents/:key/update', async (c) => {
   }
 });
 
+// T3 自己在启动时就会把配对链接打印到 t3.log（`Pairing URL:` / `App link:` / `Token:`）。
+// `t3 pair` 偶尔会在 T3 刚重启、还没就绪时失败，这时直接回退到日志里最后一条配对信息。
+function pairingFromLog() {
+  const lines = tailFile(path.join(LOG_DIR, 't3.log'), 2000).map((entry) => entry.line);
+  return parsePairingOutput(lines.join('\n'));
+}
+
 app.post('/api/t3/pair', async (c) => {
   try {
-    const result = await pairing();
+    // 刚保存模型时后台会重启 T3；等它监听端口后再取配对链接，避免命令在启动过程中失败。
+    if (t3.isRunning()) await waitForT3Ready(8000);
+    let result = await pairing();
+    let source = 'cli';
+
+    if (!result.url) {
+      const fromLog = pairingFromLog();
+      if (fromLog.url) {
+        result = {
+          ...fromLog,
+          code: 0,
+          output: `${result.output}\n\n[已回退到 T3 启动日志] ${fromLog.pairingUrl || fromLog.url}`,
+          error: '',
+        };
+        source = 'log';
+      }
+    }
+
     let qrSvg = null;
     if (result.url) {
       try {
@@ -200,7 +270,7 @@ app.post('/api/t3/pair', async (c) => {
         qrSvg = null;
       }
     }
-    return c.json({ ...result, qrSvg });
+    return c.json({ ...result, source, qrSvg });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
@@ -209,7 +279,8 @@ app.post('/api/t3/pair', async (c) => {
 app.post('/api/t3/restart', async (c) => {
   try {
     await t3.restart();
-    return c.json({ ok: true, status: t3.status() });
+    const ready = await waitForT3Ready();
+    return c.json({ ok: true, ready, status: t3.status() });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
@@ -276,25 +347,32 @@ app.get('/api/models', (c) => c.json(redactModels(settings.models)));
 app.put('/api/models', async (c) => {
   try {
     const body = await c.req.json();
-    const previousCodexId = settings.models?.assignments?.codex || null;
+    const previousModels = settings.models;
+    const previousCodexId = previousModels?.assignments?.codex || null;
     const previousCodexKey =
-      (settings.models?.profiles || []).find((profile) => profile.id === previousCodexId)?.apiKey || '';
+      (previousModels?.profiles || []).find((profile) => profile.id === previousCodexId)?.apiKey || '';
 
-    const normalized = normalizeModels(mergeSecrets(body, settings.models));
+    const normalized = normalizeModels(mergeSecrets(body, previousModels));
     settings.models = normalized;
     saveSettings(settings);
 
     const result = applyModels();
     const nextCodexKey = result.env.AGENT_HUB_CODEX_KEY || '';
-    // Codex 的 key 走环境变量，只能靠重启子进程生效；分配被移除时也要重启清掉旧 key
+    const codexKeyChanged = previousCodexKey !== nextCodexKey;
+    const modelsChanged = modelsSignature(previousModels) !== modelsSignature(normalized);
+
+    // Codex 的 key 走环境变量，只能靠重启子进程生效；
+    // OpenCode / Pi / Claude 的模型列表在 T3 启动时读取，配置变了也要重启才能刷新。
     let restarted = false;
-    if (previousCodexKey !== nextCodexKey) {
+    let ready = false;
+    if ((codexKeyChanged || modelsChanged) && t3.isRunning()) {
       await t3.restart();
+      ready = await waitForT3Ready();
       restarted = true;
-      if (multicaProc.isRunning()) {
-        await multicaProc.restart();
-        restarted = true;
-      }
+    }
+    if (codexKeyChanged && multicaProc.isRunning()) {
+      await multicaProc.restart();
+      restarted = true;
     }
 
     return c.json({
@@ -302,6 +380,7 @@ app.put('/api/models', async (c) => {
       warnings: result.warnings,
       written: result.written,
       restarted,
+      ready,
       models: redactModels(settings.models),
     });
   } catch (err) {
@@ -490,6 +569,7 @@ if (process.env.AUTOSTART_MULTICA !== '0' && settings.multica?.serverUrl) {
 const shutdown = async (signal) => {
   adminLog(`received ${signal}, stopping children`);
   await Promise.allSettled([t3.stop(), multicaProc.stop()]);
+  anthropicProxy?.stop();
   process.exit(0);
 };
 
