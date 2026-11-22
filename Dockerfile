@@ -67,6 +67,7 @@ RUN chmod +x /entrypoint.sh
 
 WORKDIR /workspace
 
+# 仅作默认端口说明；实际端口由 .env 的 T3_PORT / ADMIN_PORT 决定，host 网络下 EXPOSE 不生效
 EXPOSE 3773 3774
 
 ENTRYPOINT ["/entrypoint.sh"]

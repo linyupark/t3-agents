@@ -4,7 +4,7 @@ import path from 'node:path';
 
 export const DATA_DIR = process.env.DATA_DIR || '/root/.agent-hub';
 export const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-export const DEFAULT_CDP_URL = 'http://127.0.0.1:16002';
+export const DEFAULT_CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:16002';
 
 const EMPTY_SETTINGS = {
   models: { profiles: [], assignments: {} },

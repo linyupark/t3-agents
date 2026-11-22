@@ -17,6 +17,7 @@ services:
     restart: unless-stopped
     init: true
     network_mode: host
+    # .env.example 提供容器内默认值；项目根目录的 .env 还会被 Compose 用于 ${VAR} 插值
     env_file:
       - .env.example
       # 复制 .env.example 为 .env 后会优先加载本地覆盖
@@ -24,45 +25,45 @@ services:
         required: false
     volumes:
       # 共享工作区（agent 在这里读写代码）
-      - ./workspace:/workspace
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
 
       # 各 agent 配置持久化
-      - ./config/codex:/root/.codex
-      - ./config/claude:/root/.claude
-      - ./config/opencode:/root/.config/opencode
-      - ./config/pi:/root/.pi
-      - ./config/gemini:/root/.gemini
-      - ./config/t3:/root/.t3
+      - ${CONFIG_DIR:-./config}/codex:/root/.codex
+      - ${CONFIG_DIR:-./config}/claude:/root/.claude
+      - ${CONFIG_DIR:-./config}/opencode:/root/.config/opencode
+      - ${CONFIG_DIR:-./config}/pi:/root/.pi
+      - ${CONFIG_DIR:-./config}/gemini:/root/.gemini
+      - ${CONFIG_DIR:-./config}/t3:/root/.t3
 
       # Multica CLI 的登录态 / daemon 配置 / 日志
-      - ./config/multica:/root/.multica
+      - ${CONFIG_DIR:-./config}/multica:/root/.multica
 
       # 管理后台自己的设置（模型配置、Multica token 等）
-      - ./config/admin:/root/.agent-hub
+      - ${CONFIG_DIR:-./config}/admin:/root/.agent-hub
 
       # 后台与各进程日志
-      - ./config/logs:/var/log/agent-hub
+      - ${CONFIG_DIR:-./config}/logs:/var/log/agent-hub
 
       # SSH 密钥（T3 Code 远程环境连接用）
-      - ./config/ssh:/root/.ssh
+      - ${CONFIG_DIR:-./config}/ssh:/root/.ssh
 
       # Git 全局配置：挂目录而不是单个文件，避免 Docker 把不存在的源建成目录
-      - ./config/git:/root/.config/git
+      - ${CONFIG_DIR:-./config}/git:/root/.config/git
 
       # agent 缓存（pip/uv/playwright/go-build 等），重建容器不丢
-      - ./config/cache:/root/.cache
+      - ${CONFIG_DIR:-./config}/cache:/root/.cache
 
       # npm 缓存（全局包更新用），避免反复下载
-      - ./config/npm:/root/.npm
+      - ${CONFIG_DIR:-./config}/npm:/root/.npm
 
       # 临时目录落到宿主机，避免 agent 的临时文件撑大容器可写层
-      - ./workspace/.tmp:/tmp
-      - ./workspace/.tmp/var-tmp:/var/tmp
+      - ${WORKSPACE_DIR:-./workspace}/.tmp:/tmp
+      - ${WORKSPACE_DIR:-./workspace}/.tmp/var-tmp:/var/tmp
 
       # 全局共享 skills：Codex / OpenCode / Pi 原生读取 ~/.agents/skills
-      - ./workspace/.agents:/root/.agents
+      - ${WORKSPACE_DIR:-./workspace}/.agents:/root/.agents
       # Claude Code 只读 ~/.claude/skills，单独挂同一份目录
-      - ./workspace/.agents/skills:/root/.claude/skills
+      - ${WORKSPACE_DIR:-./workspace}/.agents/skills:/root/.claude/skills
 
       # 全局 npm 包持久化：docker compose down/up 后不再重装
       - agent_npm:/opt/agents
@@ -80,9 +81,12 @@ services:
       # root 容器无法启用 Chrome sandbox；T3 内置预览浏览器必须关闭它
       - T3CODE_SERVER_BROWSER_SANDBOX=0
       - T3_PORT=${T3_PORT:-3773}
+      - T3_BIND=${T3_BIND:-0.0.0.0}
       - ADMIN_PORT=${ADMIN_PORT:-3774}
       - ADMIN_BIND=${ADMIN_BIND:-0.0.0.0}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      # 后台首次启动时的默认 CDP 地址；保存过设置后以 settings.json 为准
+      - CDP_URL=${CDP_URL:-http://127.0.0.1:16002}
       - AUTOSTART_MULTICA=${AUTOSTART_MULTICA:-1}
       - MULTICA_WORKSPACES_ROOT=/workspace/.multica-workspaces
       # 避免 daemon 自行升级导致行为漂移；升级请在后台点按钮
@@ -95,18 +99,19 @@ services:
     stop_grace_period: 20s
 
     # Docker 默认 /dev/shm 只有 64MB，Chrome 渲染大页面容易崩
-    shm_size: 1g
+    shm_size: ${SHM_SIZE:-1g}
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${ADMIN_PORT:-3774}/healthz || exit 1"]
+      # 用容器内环境变量在运行时展开；ADMIN_BIND 绑到具体网卡时，回环地址可能不通
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$$ADMIN_PORT/healthz || curl -fsS http://$$ADMIN_BIND:$$ADMIN_PORT/healthz || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
 
     # deploy.resources 在非 swarm compose 中不生效；用 mem_limit 才有内存保护
-    mem_limit: 6g
-    memswap_limit: 6g
+    mem_limit: ${MEM_LIMIT:-6g}
+    memswap_limit: ${MEM_LIMIT:-6g}
 
 volumes:
   agent_npm:

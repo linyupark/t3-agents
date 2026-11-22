@@ -28,6 +28,7 @@ const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || '/root/.agent-hub';
 const LOG_DIR = process.env.LOG_DIR || '/var/log/agent-hub';
 const T3_PORT = String(process.env.T3_PORT || '3773');
+const T3_BIND = process.env.T3_BIND || '0.0.0.0';
 const ADMIN_PORT = Number(process.env.ADMIN_PORT || '3774');
 const ADMIN_BIND = process.env.ADMIN_BIND || '0.0.0.0';
 const MANAGED_ENV = ['AGENT_HUB_CODEX_KEY'];
@@ -69,7 +70,7 @@ const token = adminToken();
 
 const t3 = new ManagedProcess('t3', {
   cmd: 't3',
-  args: ['serve', '--host', '0.0.0.0', '--port', T3_PORT, '--no-browser', '--lan', '/workspace'],
+  args: ['serve', '--host', T3_BIND, '--port', T3_PORT, '--no-browser', '--lan', '/workspace'],
   cwd: '/workspace',
   logFile: path.join(LOG_DIR, 't3.log'),
   restart: true,
@@ -156,7 +157,9 @@ app.get('/api/status', (c) =>
   c.json({
     now: Date.now(),
     t3Port: T3_PORT,
+    t3Bind: T3_BIND,
     adminPort: ADMIN_PORT,
+    adminBind: ADMIN_BIND,
     t3: t3.status(),
     multica: multicaProc.status(),
     multicaConfigured: Boolean(settings.multica?.serverUrl),
